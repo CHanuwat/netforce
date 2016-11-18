@@ -750,6 +750,8 @@ var FormView=NFView.extend({
                     dropdown: $el.attr("dropdown"),
                     align: "right",
                     perm: $el.attr("perm"),
+                    attrs: $el.attr("attrs"),
+                    states: $el.attr("states"),
                     context: context
                 };
                 if (that.active_id) {
