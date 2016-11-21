@@ -164,6 +164,9 @@ var FormView=NFView.extend({
                     that.data.show_foot=true;
                 }
                 that.data.show_background=!that.data.readonly;
+                if (that.$form.attr("nobackground")) {
+                    that.data.show_background=false;
+                }
                 var args=[that.options.search_condition || []];
                 var opts={
                     offset: that.options.offset||0,
