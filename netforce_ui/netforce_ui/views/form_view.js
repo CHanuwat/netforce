@@ -266,6 +266,9 @@ var FormView=NFView.extend({
                     that.data.show_foot=true;
                 }
                 that.data.show_background=!that.data.readonly;
+                if (that.$form.attr("nobackground")) {
+                    that.data.show_background=false;
+                }
                 NFView.prototype.render.call(that);
                 if (that.focus_field) {
                     var view=that.get_field_view(that.focus_field);
