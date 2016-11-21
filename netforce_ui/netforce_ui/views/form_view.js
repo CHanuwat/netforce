@@ -669,6 +669,7 @@ var FormView=NFView.extend({
                     perm: $el.attr("perm"),
                     attrs: $el.attr("attrs"),
                     split: $el.attr("split"),
+                    method_options: $el.attr("method_options"),
                     confirm: $el.attr("confirm"),
                     context: context
                 };
