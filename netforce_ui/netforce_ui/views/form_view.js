@@ -142,6 +142,9 @@ var FormView=NFView.extend({
                         }
                         that.data.page_title=title;
                     }
+                    if (that.$form.attr("notitle")){
+                        that.data.page_title=null;
+                    }
                 }
                 if (that.$form.find("head").length>0) {
                     that.data.show_head=true;
@@ -241,6 +244,9 @@ var FormView=NFView.extend({
                             title+=" "+model_string;
                         }
                         that.data.page_title=title;
+                    }
+                    if (that.$form.attr("notitle")){
+                        that.data.page_title=null;
                     }
                 }
                 if (that.$form.find("head").length>0) {
