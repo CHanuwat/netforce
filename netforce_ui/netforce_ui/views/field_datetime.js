@@ -50,6 +50,9 @@ var FieldDateTime=NFView.extend({
         this.data.value=val;
         var field=model.get_field(name);
         this.data.string=field.string;
+        if (this.options.string) {
+            this.data.string=this.options.string;
+        }
         this.data.readonly=field.readonly||this.options.readonly||this.context.readonly;
         var attrs=this.eval_attrs();
         if (attrs.readonly!==undefined) {
@@ -77,11 +80,21 @@ var FieldDateTime=NFView.extend({
             opts.minViewMode="years";
         }
         this.$el.find("input").datetimepicker(opts);
+        var required=false;
+        if (field.required!=null) required=field.required;
+        if (this.options.required!=null) required=this.options.required;
+        if (attrs.required!=null) required=attrs.required;
+        if (required && !this.data.readonly) {
+            this.$el.addClass("nf-required-field");
+            this.data.required=true;
+        } else {
+            this.data.required=false;
+        }
         if (field.required && !this.data.readonly) {
             this.$el.addClass("nf-required-field");
-        }
-        if (field.required) {
-            model.set_required(name);
+            this.data.required=true;
+        } else {
+            this.data.required=false;
         }
         var err=model.get_field_error(name);
         if (err) {
@@ -89,7 +102,11 @@ var FieldDateTime=NFView.extend({
         } else {
             this.$el.removeClass("error");
         }
-        if (this.options.invisible || attrs.invisible) {
+        var perms=get_field_permissions(model.name,name);
+        if (!perms.perm_write) {
+            this.data.readonly=true;
+        }
+        if (this.options.invisible || attrs.invisible || !perms.perm_read) {
             this.$el.hide();
         } else {
             this.$el.show();

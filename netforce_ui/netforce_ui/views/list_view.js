@@ -164,6 +164,13 @@ var ListView=NFView.extend({
         } else {
             this.data.show_list=false;
         }
+
+        var h=window.location.hash.substr(1);
+        var action=qs_to_obj(h);
+        if(action && action.limit){
+            this.options.limit=action.limit;
+        }
+
         var opts={
             field_names: field_names,
             order: this.options.order,
@@ -171,6 +178,11 @@ var ListView=NFView.extend({
             limit: this.options.limit||100,
             count: true
         }
+        // unlimited -1
+        if(opts.limit<0){
+            delete opts.limit;
+        }
+
         if (that.options.show_full) {
             this.data.header_scroll=true;
         }
@@ -192,6 +204,7 @@ var ListView=NFView.extend({
                 that.data.context.data=data;
                 that.data.context.collection=that.collection;
                 that.data.context.model=null; // XXX
+                that.data.context.model_name=model_name;
                 if (that.$list.attr("group_fields")) {
                     that.data.group_fields=that.$list.attr("group_fields").split(",");
                 }
@@ -231,7 +244,7 @@ var ListView=NFView.extend({
         var html=$("<div/>");
         if ((this.options.show_full || this.options.show_search) && !this.$list.attr("no_search")) { // XXX
             if (_.isEmpty(this.options.search_condition)) {
-                html.append('<button type="button" class="btn btn-sm btn-default pull-right search-btn" style="white-space:nowrap;"><i class="icon-search"></i> Search</button>');
+                html.append('<button type="button" class="btn btn-sm btn-default pull-right search-btn" style="white-space:nowrap;"><i class="icon-search"></i> '+ translate("Search")+"</button>");
             }
         }
         if (this.options.show_full||this.options.show_default_buttons) { // XXX
@@ -276,14 +289,16 @@ var ListView=NFView.extend({
                     var view=Button.make_view(opts);
                     html.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
                 }
-                var opts={
-                    string: "Export",
-                    size: "small",
-                    method: "_export2",
-                    context: context
-                };
-                var view=Button.make_view(opts);
-                html.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
+                if(allow_import_export(that.context)){
+                    var opts={
+                        string: "Export",
+                        size: "small",
+                        method: "_export2",
+                        context: context
+                    };
+                    var view=Button.make_view(opts);
+                    html.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
+                }
             }
         }
         this.$list.find("head").children().each(function() {
@@ -300,6 +315,7 @@ var ListView=NFView.extend({
                     next: $el.attr("next"),
                     icon: $el.attr("icon"),
                     perm: $el.attr("perm"),
+                    perm_model: $el.attr("perm_model"),
                     confirm: $el.attr("confirm"),
                     context: context
                 };
@@ -333,21 +349,24 @@ var ListView=NFView.extend({
                 };
                 var view=Button.make_view(opts);
                 html.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
-                var opts={
-                    string: "Import",
-                    action: "import_data",
-                    action_options: "import_model="+that.options.model+"&next="+this.options.action_name,
-                    icon: "download",
-                    context: that.data.context
-                };
-                var view=Button.make_view(opts);
-                html.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
+                if(allow_import_export(that.context)){
+                    var opts={
+                        string: "Import",
+                        action: "import_data",
+                        action_options: "import_model="+that.options.model+"&next="+this.options.action_name,
+                        icon: "download",
+                        context: that.data.context
+                    };
+                    var view=Button.make_view(opts);
+                    html.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
+                }
             }
         }
         this.$list.find("top").children().each(function() {
             var $el=$(this);
             var tag=$el.prop("tagName");
             if (tag=="button") {
+                context.model_name=that.options.model;
                 var opts={
                     string: $el.attr("string"),
                     model: that.options.model,
@@ -360,9 +379,13 @@ var ListView=NFView.extend({
                     next: $el.attr("next"),
                     icon: $el.attr("icon"),
                     perm: $el.attr("perm"),
+                    perm_model: $el.attr("perm_model"),
                     dropdown: $el.attr("dropdown"),
                     context: context
                 };
+                if (opts.action=="import_data" || opts.action=="export_data"){
+                    if(!allow_import_export(that.context)) return;
+                }
                 if (opts.dropdown) {
                     var inner="";
                     $el.children().each(function() {

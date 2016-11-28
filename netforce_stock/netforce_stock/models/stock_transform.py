@@ -48,11 +48,11 @@ class Transform(Model):
         if not seq_id:
             return None
         while 1:
-            num = get_model("sequence").get_next_number(seq_id)
+            num = get_model("sequence").get_next_number(seq_id,context)
             res = self.search([["number", "=", num]])
             if not res:
                 return num
-            get_model("sequence").increment_number(seq_id)
+            get_model("sequence").increment_number(seq_id,context)
 
     _defaults = {
         "state": "draft",
@@ -104,11 +104,27 @@ class Transform(Model):
 
     def void(self, ids, context={}):
         obj = self.browse(ids)[0]
+        obj.void_acc_move()
         obj.stock_moves.delete()
         obj.write({"state": "voided"})
 
+    def void_acc_move(self,ids,context={}):
+        print("void_acc_move ...")
+        for id in ids:
+            for acc_move in get_model("account.move").search_browse([['related_id','=','stock.transform,%s'%id]]):
+                acc_move.void()
+        print("done!")
+
+    def set_draft_acc_move(self,ids,context={}):
+        print("set_draft_acc_move ...")
+        for id in ids:
+            for acc_move in get_model("account.move").search_browse([['related_id','=','stock.transform,%s'%id]]):
+                acc_move.to_draft()
+        print("done!")
+
     def to_draft(self, ids, context={}):
         obj = self.browse(ids)[0]
+        obj.set_draft_acc_move()
         obj.stock_moves.delete()
         obj.write({"state": "draft"})
 
@@ -155,6 +171,13 @@ class Transform(Model):
             }
             lines.append(line_vals)
         data["source_lines"] = lines
+        return data
+
+    def onchange_date(self, context={}):
+        data = context["data"]
+        context['date']=data['date']
+        num=self._get_number(context=context)
+        data["number"] = num
         return data
 
 Transform.register()

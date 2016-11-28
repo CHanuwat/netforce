@@ -48,6 +48,9 @@ var List=NFView.extend({
     render: function() {
         log("list.render",this);
         this.data.select_model=!this.options.select_group && !this.options.noselect;
+        if(this.context && this.context.one_select){
+            this.data.select_model=false;
+        }
         this.data.select_group=this.options.select_group;
         var collection=this.context.collection;
         var order=collection.order;
@@ -247,7 +250,7 @@ var List=NFView.extend({
 
     line_click: function(model) {
         log("list.line_click",this,model);
-        if (this.options.on_click_item) {
+        if (this.options.on_click_item && this.options.data) {
             this.options.on_click_item(this.options.data.id);
         }
     },

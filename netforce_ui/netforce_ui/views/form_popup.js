@@ -165,6 +165,9 @@ var FormPopup=NFView.extend({
                     perm: $el.attr("perm"),
                     link: $el.attr("link"),
                     view: $el.attr("view"),
+                    count: $el.attr("count"),
+                    string: $el.attr("string"),
+                    confirm: $el.attr("confirm"),
                     form_layout: form_layout,
                     context: context
                 };
@@ -336,6 +339,7 @@ var FormPopup=NFView.extend({
                     states: $el.attr("states"),
                     perm: $el.attr("perm"),
                     attrs: $el.attr("attrs"),
+                    confirm: $el.attr("confirm"),
                     context: context
                 };
                 var view=Button.make_view(opts);

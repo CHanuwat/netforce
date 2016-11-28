@@ -21,9 +21,9 @@
 from netforce.model import Model, fields, get_model
 from netforce.utils import get_data_path
 import time
+from decimal import Decimal
 from netforce import config
 from netforce import database
-from pprint import pprint
 from netforce.access import get_active_company, set_active_user, set_active_company
 from netforce.utils import get_file_path
 
@@ -92,6 +92,7 @@ class Invoice(Model):
         "quarter": fields.Char("Quarter", sql_function=["quarter", "date"]),
         "month": fields.Char("Month", sql_function=["month", "date"]),
         "week": fields.Char("Week", sql_function=["week", "date"]),
+        "note" : fields.Text("Note"),
     }
     _order = "date desc,number desc"
 
@@ -184,6 +185,8 @@ class Invoice(Model):
                     name = "Overpayment"
             if obj.ref:
                 name += " [%s]" % obj.ref
+            if obj.tax_no:
+                name+=", "+obj.tax_no
             vals.append((obj.id, name))
         return vals
 
@@ -212,6 +215,8 @@ class Invoice(Model):
         sale_ids = []
         purch_ids = []
         for inv in self.browse(ids):
+            if inv.inv_type == "prepay" and inv.type == "out" and "can_delete" not in context:
+                raise Exception("Can't delete invoice with Prepayment. Please delete by using To Draft option in payment.")
             if inv.inv_type not in ("prepay", "overpay"):
                 if inv.state not in ("draft", "waiting_approval", "voided"):
                     raise Exception("Can't delete invoice with this status")
@@ -278,9 +283,12 @@ class Invoice(Model):
             if obj.currency_id.id == settings.currency_id.id:
                 currency_rate = 1
             else:
-                rate_from = obj.currency_id.get_rate(date=obj.date)
+                rate_type=obj.type=="out" and "sell" or "buy"
+                rate_from = obj.currency_id.get_rate(date=obj.date,rate_type=rate_type)
                 if not rate_from:
                     raise Exception("Missing currency rate for %s" % obj.currency_id.code)
+                if not settings.currency_id:
+                    raise Exception("Missing default currency in Financial Settings")
                 rate_to = settings.currency_id.get_rate(date=obj.date)
                 if not rate_to:
                     raise Exception("Missing currency rate for %s" % settings.currency_id.code)
@@ -292,11 +300,9 @@ class Invoice(Model):
         total_base = 0
         total_tax = 0
         for line in obj.lines:
-            cur_amt = get_model("currency").convert(
-                line.amount, obj.currency_id.id, settings.currency_id.id, rate=currency_rate)
             tax_id = line.tax_id
             if tax_id and obj.tax_type != "no_tax":
-                base_amt = get_model("account.tax.rate").compute_base(tax_id, cur_amt, tax_type=obj.tax_type)
+                base_amt = get_model("account.tax.rate").compute_base(tax_id, line.amount, tax_type=obj.tax_type)
                 if settings.rounding_account_id:
                     base_amt=get_model("currency").round(obj.currency_id.id,base_amt)
                 tax_comps = get_model("account.tax.rate").compute_taxes(tax_id, base_amt, when="invoice")
@@ -305,7 +311,7 @@ class Invoice(Model):
                     tax_vals["tax_amt"] += tax_amt
                     tax_vals["base_amt"] += base_amt
             else:
-                base_amt = cur_amt
+                base_amt = line.amount
         for comp_id, tax_vals in taxes.items():
             comp = get_model("account.tax.component").browse(comp_id)
             acc_id = comp.account_id.id
@@ -373,7 +379,8 @@ class Invoice(Model):
                 if obj.currency_id.id == settings.currency_id.id:
                     currency_rate = 1
                 else:
-                    rate_from = obj.currency_id.get_rate(date=obj.date)
+                    rate_type=obj.type=="out" and "sell" or "buy"
+                    rate_from = obj.currency_id.get_rate(date=obj.date,rate_type=rate_type)
                     if not rate_from:
                         raise Exception("Missing currency rate for %s" % obj.currency_id.code)
                     rate_to = settings.currency_id.get_rate(date=obj.date)
@@ -419,14 +426,18 @@ class Invoice(Model):
                 acc_id = comp.account_id.id
                 if not acc_id:
                     raise Exception("Missing account for tax component %s" % comp.name)
-                amt = sign * tax.tax_amount
+                tax_amt = get_model("currency").convert(
+                    tax.tax_amount, obj.currency_id.id, settings.currency_id.id, rate=currency_rate)
+                base_amt = get_model("currency").convert(
+                    tax.base_amount, obj.currency_id.id, settings.currency_id.id, rate=currency_rate)
+                amt = sign * tax_amt
                 line_vals = {
                     "description": desc,
                     "account_id": acc_id,
                     "credit": amt > 0 and amt or 0,
                     "debit": amt < 0 and -amt or 0,
                     "tax_comp_id": comp.id,
-                    "tax_base": tax.base_amount,
+                    "tax_base": base_amt,
                     "contact_id": contact.id,
                     "invoice_id": obj.id,
                     "tax_no": tax.tax_no,
@@ -525,6 +536,8 @@ class Invoice(Model):
         obj = self.browse(ids)[0]
         if obj.state != "waiting_payment":
             raise Exception("Invalid status")
+        if obj.credit_notes:
+            raise Exception("There are still payment entries for this invoice")
         if obj.move_id:
             obj.move_id.void()
             obj.move_id.delete()
@@ -637,13 +650,40 @@ class Invoice(Model):
                     data["amount_tax"] += tax_amt
             else:
                 base_amt = amt
-            data["amount_subtotal"] += base_amt
+            data["amount_subtotal"] += Decimal(base_amt)
         if tax_type == "tax_in":
             data["amount_rounding"] = sum(
                 l.get("amount") or 0 for l in data["lines"] if l) - (data["amount_subtotal"] + data["amount_tax"])
         else:
             data["amount_rounding"] = 0
         data["amount_total"] = data["amount_subtotal"] + data["amount_tax"] + data["amount_rounding"]
+
+        paid = 0
+        for pmt in data['payments']:
+            if pmt['payment_id'] == data['payment_id']:
+                continue
+            if data['type'] == pmt['type']:
+                paid -= pmt['amount_currency']
+            else:
+                paid += pmt['amount_currency']
+        if data['inv_type'] in ("invoice", "debit"):
+            cred_amt = 0
+            for alloc in data['credit_notes']:
+                cred_amt += alloc['amount']
+            data["amount_due"] = data["amount_total"] - paid - cred_amt
+            data["amount_paid"] = paid + cred_amt
+        elif data['inv_type'] in ("credit", "prepay", "overpay"):
+            cred_amt = 0
+            for alloc in data['credit_alloc']:
+                cred_amt += alloc['amount']
+            for pmt in data['payments']:
+                payment=get_model("account.payment").browse(pmt['payment_id'])
+                if payment.type == data['type']:
+                    cred_amt += pmt['amount']
+                else:
+                    cred_amt -= pmt['amount']
+            data["amount_credit_remain"] = data["amount_total"] - cred_amt
+            data["amount_due"] = -data["amount_credit_remain"]
         return data
 
     def onchange_product(self, context):
@@ -662,19 +702,32 @@ class Invoice(Model):
         if prod.uom_id is not None:
             line["uom_id"] = prod.uom_id.id
         if type == "out":
-            if prod.sale_price is not None:
+            if prod.sale_price:
                 line["unit_price"] = prod.sale_price
-            if prod.sale_account_id is not None:
+            if prod.sale_account_id:
                 line["account_id"] = prod.sale_account_id.id
-            if prod.sale_tax_id is not None:
-                line["tax_id"] = contact.tax_receivable_id.id or prod.sale_tax_id.id
+            elif prod.categ_id and prod.categ_id.sale_account_id:
+                line["account_id"] = prod.categ_id.sale_account_id.id
+
+            if contact.tax_receivable_id:
+                line["tax_id"] = contact.tax_receivable_id.id
+            elif prod.sale_tax_id:
+                line["tax_id"] = prod.sale_tax_id.id
+            elif prod.categ_id and prod.categ_id.sale_tax_id:
+                line["tax_id"] = prod.categ_id.sale_tax_id.id
         elif type == "in":
-            if prod.purchase_price is not None:
+            if prod.purchase_price:
                 line["unit_price"] = prod.purchase_price
-            if prod.purchase_account_id is not None:
+            if prod.purchase_account_id:
                 line["account_id"] = prod.purchase_account_id.id
-            if prod.purchase_tax_id is not None:
-                line["tax_id"] = contact.tax_payable_id.id or prod.purchase_tax_id.id
+            elif prod.categ_id and prod.categ_id.purchase_account_id:
+                line["account_id"] = prod.categ_id.purchase_account_id.id
+            if contact.tax_payable_id:
+                line["tax_id"] = contact.tax_payable_id.id
+            elif prod.purchase_tax_id:
+                line["tax_id"] = prod.purchase_tax_id.id
+            elif prod.categ_id and prod.categ_id.purchase_tax_id:
+                line["tax_id"] = prod.categ_id.purchase_tax_id.id
         data = self.update_amounts(context)
         return data
 
@@ -806,12 +859,57 @@ class Invoice(Model):
                 "amount": line.amount,
             }
             vals["lines"].append(("create", line_vals))
-        new_id = self.create(vals, context={"type": obj.type, "inv_type": obj.inv_type})
+        ctx={"type": obj.type, "inv_type": obj.inv_type, "date": context.get("date")}
+        new_id = self.create(vals, context=ctx)
         new_obj = self.browse(new_id)
         if obj.type == "out":
             msg = "Invoice %s copied to %s" % (obj.number, new_obj.number)
         else:
             msg = "Invoice copied"
+        return {
+            "next": {
+                "name": "view_invoice",
+                "active_id": new_id,
+            },
+            "flash": msg,
+        }
+
+    def copy_to_debit_note(self, ids, context):
+        obj = self.browse(ids)[0]
+        vals = {
+            "type": obj.type,
+            "inv_type": "debit",
+            "ref": obj.number,
+            "contact_id": obj.contact_id.id,
+            "bill_address_id": obj.bill_address_id.id,
+            "currency_id": obj.currency_id.id,
+            "currency_rate": obj.currency_rate,
+            "tax_type": obj.tax_type,
+            "memo": obj.memo,
+            "tax_no": obj.tax_no,
+            "pay_method_id": obj.pay_method_id.id,
+            "original_invoice_id": obj.id,
+            "lines": [],
+        }
+        if obj.related_id:
+            vals["related_id"] = "%s,%s" % (obj.related_id._model, obj.related_id.id)
+        for line in obj.lines:
+            line_vals = {
+                "product_id": line.product_id.id,
+                "description": line.description,
+                "qty": line.qty,
+                "uom_id": line.uom_id.id,
+                "unit_price": line.unit_price,
+                "tax_id": line.tax_id.id,
+                "account_id": line.account_id.id,
+                "sale_id": line.sale_id.id,
+                "purch_id": line.purch_id.id,
+                "amount": line.amount,
+            }
+            vals["lines"].append(("create", line_vals))
+        new_id = self.create(vals, context={"type": vals["type"], "inv_type": vals["inv_type"]})
+        new_obj = self.browse(new_id)
+        msg = "Debit note %s created from invoice %s" % (new_obj.number, obj.number)
         return {
             "next": {
                 "name": "view_invoice",
@@ -921,7 +1019,8 @@ class Invoice(Model):
                     "dep_exp_account_id": ass_type.dep_exp_account_id.id,
                     "invoice_id": obj.id,
                 }
-                get_model("account.fixed.asset").create(vals)
+                context['date']=obj.date
+                get_model("account.fixed.asset").create(vals,context)
 
     def delete_alloc(self, context={}):
         alloc_id = context["alloc_id"]
@@ -1001,6 +1100,10 @@ class Invoice(Model):
         }
         if settings.logo:
             data["logo"] = get_file_path(settings.logo)
+            #support settings.logo
+            data['settings']={
+                "logo": get_file_path(settings.logo)
+            }
         for line in inv.lines:
             data["lines"].append({
                 "description": line.description,

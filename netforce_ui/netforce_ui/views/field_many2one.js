@@ -24,7 +24,7 @@ var FieldMany2One=NFView.extend({
     _name: "field_many2one",
     className: "form-group nf-field",
     events: {
-        "mousedown button": "btn_mousedown",
+        "mousedown button.nf-m2o-dropdown": "btn_mousedown",
         "keydown input": "keydown", // check FF (keypress?)
         "blur input": "blur",
         "focus input": "on_focus",
@@ -76,6 +76,14 @@ var FieldMany2One=NFView.extend({
             }
             action.active_id=id;
             this.data.link_url="#"+obj_to_qs(action);
+        } else if (value && this.options.click_action) {
+            var id;
+            if (_.isArray(value)) {
+                id=value[0];
+            } else {
+                id=value;
+            }
+            this.data.link_url="#name="+this.options.click_action+"&active_id="+id;
         } else if (value && !this.options.nolink) {
             var id;
             if (_.isArray(value)) {
@@ -96,7 +104,7 @@ var FieldMany2One=NFView.extend({
         }
         var perms=get_field_permissions(this.context.model.name,this.options.name);
         this.data.readonly=field.readonly||this.options.readonly||this.context.readonly||!perms.perm_write;
-        if (this.options.disable_edit_link && !this.data.readonly) {
+        if (this.options.nolink || this.options.disable_edit_link && !this.data.readonly) {
             this.data.link_url=null;
         }
         var attrs=this.eval_attrs();
@@ -113,7 +121,7 @@ var FieldMany2One=NFView.extend({
         //log("XXXXXXXXXXXXXXXXXX",required);
         if (required && !this.data.readonly) {
             this.$el.addClass("nf-required-field");
-        /*this.data.required=true;*/
+            this.data.required=true;
         } else {
             this.data.required=false;
         }
@@ -129,9 +137,6 @@ var FieldMany2One=NFView.extend({
             that.disable_blur=true;
             NFView.prototype.render.call(that);
             that.disable_blur=false;
-            if (that.data.required && !that.data.readonly) {
-                that.show_required();
-            }
             if (that.data.required) {
                 model.set_required(name);
             } else {
@@ -166,9 +171,7 @@ var FieldMany2One=NFView.extend({
                 .on('mousedown',$.proxy(that.menu_mousedown, that))
                 .on('mouseenter', 'li', $.proxy(that.menu_mouseenter, that))
                 .on("click",function(e) {e.preventDefault();});
-            if (!that.data.readonly) {
-                that.$el.find("input").focus();
-            }
+            that.$el.find("a.help").tooltip();
         }
         if (value) {
             if (_.isArray(value)) {
@@ -194,10 +197,6 @@ var FieldMany2One=NFView.extend({
             this.data.value_name="";
             do_render();
         }
-    },
-
-    show_required: function() {
-        this.$el.find(".label-text").append(" <span style='color:#e32'>*</span>");
     },
 
     btn_mousedown: function(e) {
@@ -365,9 +364,17 @@ var FieldMany2One=NFView.extend({
             });
             if (!cur_text) {
                 var mr=get_model(this.relation);
-                if (mr.string) {
-                    var item=$('<li data-value="_create_link"><a href="#" style="font-weight:bold">New '+mr.string+'</a></li>');
+                if (mr.string && !this.options.nolink) {
+                    if(items && items.length>1){
+                        var new_item=translate('Search More...');
+                        var item=$('<li data-value="_search"><a href="#" style="font-weight:bold">'+new_item+'</a></li>');
+                        items=[item[0]].concat(items);
+                    }
+
+                    var new_item=translate('New '+mr.string);
+                    var item=$('<li data-value="_create_link"><a href="#" style="font-weight:bold">'+new_item+'</a></li>');
                     items=[item[0]].concat(items);
+
                 }
             }
             this.$menu.html(items);
@@ -460,6 +467,54 @@ var FieldMany2One=NFView.extend({
                     form.do_onchange(that.options.onchange,path);
                 }
             });
+        } else if (val=="_search") {
+            this.hide_menu();
+            var opts={
+                model: this.relation,
+                condition: this.eval_condition()
+            };
+
+            if(this.data.required){
+                this.$el.removeClass("nf-required-field");
+            }
+            var view=new SearchMany2One({options:opts});
+            view.render();
+            view.$el.modal({backdrop: 'static', keyboard: false, view_cid: view.cid});
+            this.$el.append(view.el);
+            that.disable_blur=true; // FIXME
+
+            view.on("close_search",function(select_item){
+                if(that.data.required){
+                    that.$el.addClass("nf-required-field");
+                }
+                view.$el.modal("hide");
+                if(select_item){
+                    var name=that.options.name;
+                    var model=that.context.model;
+                    var val_id=select_item.get("id");
+                    var ids=[val_id];
+                    rpc_execute(that.relation,"name_get",[ids],{},function(err,data) {
+                        that.data.value_name=data[0][1];
+                        model.set(name,[val_id,data[0][1]],{silent:true});
+                        that.render();
+                        var form=that.context.form;
+                        if (that.options.onchange) {
+                            var path=model.get_path(name);
+                            form.do_onchange(that.options.onchange,path);
+                        }
+                    });
+                    // keep scrollbar after close other popup
+                    if($('.modal').hasClass('in')) {
+                        $('body').addClass('modal-open');
+                    };
+                }
+
+                if(!$('.modal').hasClass('in')) {
+                    $("body").css({"overflow-y":"scroll"});
+                }
+
+            });
+
         } else if (val=="_create_link") {
             this.hide_menu();
             var action=find_new_action(this.relation);
@@ -583,6 +638,7 @@ var FieldMany2One=NFView.extend({
     on_focus: function(e) {
         log("m2o.on_focus");
         register_focus(e.target);
+        $(e.target).select();
     },
 
     eval_attrs: function() {
@@ -669,9 +725,13 @@ var FieldMany2One=NFView.extend({
         };
         var view=view_cls.make_view(opts);
         log("view",view,view.el);
-        $("body").append(view.el);
+        if($(".modal").hasClass("in")){
+            $(".modal").append(view.el);
+        }else{
+            $("body").append(view.el);
+        }
         view.render();
-    }
+    },
 });
 
 FieldMany2One.register();

@@ -19,14 +19,13 @@
 # OR OTHER DEALINGS IN THE SOFTWARE.
 
 from netforce.model import Model, fields, get_model
-from netforce.utils import get_data_path
+from netforce.utils import get_data_path, roundup
 from netforce.database import get_active_db
 import time
 import uuid
 from netforce.access import get_active_company, set_active_user, get_active_user
 from . import utils
 from decimal import *
-
 
 class SaleQuot(Model):
     _name = "sale.quot"
@@ -100,6 +99,25 @@ class SaleQuot(Model):
         settings = get_model("settings").browse(1)
         return settings.currency_id.id
 
+    def _get_currency_rates(self,context={}):
+        settings = get_model("settings").browse(1)
+        lines=[]
+        date = time.strftime("%Y-%m-%d")
+        val = {
+            "currency_id": settings.currency_id.id,
+            "rate": settings.currency_id.get_rate(date,"sell") or 1
+        }
+        if context.get('action_name'):
+            # default for new quotation create via quotation form
+            lines.append(val)
+        else:
+            # When users create or copy quotation from other modules or methods, one2many field cannot be appended without action key
+            # bacause it must be created in the database along with quotation itself.
+            # If action key such as 'create', 'delete' is missing, the default line will not be created.
+            # So, the action_key 'create' has to be appended into the list also.
+            lines.append(("create",val))
+        return lines
+
     _defaults = {
         "state": "draft",
         "date": lambda *a: time.strftime("%Y-%m-%d"),
@@ -109,6 +127,7 @@ class SaleQuot(Model):
         "user_id": lambda self, context: get_active_user(),
         "uuid": lambda *a: str(uuid.uuid4()),
         "company_id": lambda *a: get_active_company(),
+        "currency_rates": _get_currency_rates,
     }
     _constraints = ["check_fields"]
     _order = "date desc"
@@ -194,16 +213,61 @@ class SaleQuot(Model):
         data["amount_subtotal"] = 0
         data["amount_tax"] = 0
         tax_type = data["tax_type"]
+        #===============>>>
+        def _get_relative_currency_rate(currency_id):
+            rate=None
+            for r in data['currency_rates']:
+                if r.get('currency_id')==currency_id:
+                    rate=r.get('rate') or 0
+                    break
+            if rate is None:
+                print(data['date'],currency_id,data['currency_id'])
+                rate_from=get_model("currency").get_rate([currency_id],data['date']) or Decimal(1)
+                rate_to=get_model("currency").get_rate([data['currency_id']],data['date']) or Decimal(1)
+                rate=rate_from/rate_to
+            return rate
+        item_costs={}
+        for cost in data['est_costs']:
+            if not cost:
+                continue
+            amt=cost['amount'] or 0
+            if cost.get('currency_id'):
+                print(cost.get("currency_id.id"),cost.get("currency_id"))
+                rate=_get_relative_currency_rate(cost.get("currency_id"))
+                amt=amt*rate
+            comps=[]
+            if cost.get("sequence"):
+                for comp in cost['sequence'].split("."):
+                    comps.append(comp)
+                    path=".".join(comps)
+                    k=(data['id'],path)
+                    item_costs.setdefault(k,0)
+                    item_costs[k]+=amt
+        #<<<===============
         for line in data["lines"]:
             if not line:
                 continue
             amt = (line.get("qty") or 0) * (line.get("unit_price") or 0)
+            amt = Decimal(roundup(amt))
             if line.get("discount"):
-                disc = amt * line["discount"] / Decimal(100)
+                disc = Decimal(amt) * Decimal(line["discount"]) / Decimal(100)
                 amt -= disc
-            else:
-                disc = 0
+            if line.get("discount_amount"):
+                amt -= line["discount_amount"]
             line["amount"] = amt
+            #===============>>>
+            k=None
+            if id in data:
+                k=(data['id'],line.get("sequence",0))
+            else:
+                k=(line.get("sequence",0))
+            cost=item_costs.get(k,0)
+            profit=amt-cost
+            margin=profit*100/amt if amt else 0
+            line["est_cost_amount"]=cost
+            line["est_profit_amount"]=profit
+            line["est_margin_percent"]=margin
+            #<<<===============
         hide_parents=[]
         for line in data["lines"]:
             if not line:
@@ -243,9 +307,9 @@ class SaleQuot(Model):
             else:
                 tax = 0
             if tax_type == "tax_in":
-                data["amount_subtotal"] += line["amount"] - tax
+                data["amount_subtotal"] += Decimal(line["amount"] - tax)
             else:
-                data["amount_subtotal"] += line["amount"]
+                data["amount_subtotal"] += Decimal(line["amount"])
         data["amount_total"] = data["amount_subtotal"] + data["amount_tax"]
         return data
 
@@ -340,7 +404,7 @@ class SaleQuot(Model):
         if not uom_id:
             return {}
         uom = get_model("uom").browse(uom_id)
-        if line.get("unit_price") is None and prod.sale_price is not None:
+        if prod.sale_price is not None:
             line["unit_price"] = prod.sale_price * uom.ratio / prod.uom_id.ratio
         data = self.update_amounts(context)
         return data
@@ -366,7 +430,10 @@ class SaleQuot(Model):
                 "uom_id": line.uom_id.id,
                 "unit_price": line.unit_price,
                 "discount": line.discount,
+                "discount_amount": line.discount_amount,
                 "tax_id": line.tax_id.id,
+                'amount': line.amount,
+                'sequence': line.sequence,
             }
             vals["lines"].append(("create", line_vals))
         new_id = self.create(vals, context=context)
@@ -403,9 +470,10 @@ class SaleQuot(Model):
             "job_template_id": obj.job_template_id.id,
             "est_costs": [],
             "currency_rates": [],
+            "related_id": "sale.quot,%s"%obj.id,
         }
         for line in obj.lines:
-            if not line.qty or not line.uom_id or not line.unit_price:
+            if not line.qty:
                 continue
             prod=line.product_id
             line_vals={
@@ -413,12 +481,19 @@ class SaleQuot(Model):
                 "product_id": prod.id,
                 "description": line.description,
                 "qty": line.qty,
-                "uom_id": line.uom_id.id,
+                "uom_id": line.uom_id and line.uom_id.id or None,
                 "unit_price": line.unit_price if not line.is_hidden else 0,
                 "discount": line.discount if not line.is_hidden else 0,
+                "discount_amount": line.discount_amount if not line.is_hidden else 0,
                 "tax_id": line.tax_id.id if not line.is_hidden else None,
                 "location_id": prod.location_id.id if prod else None,
             }
+            if prod.locations:
+                line_vals["location_id"] = prod.locations[0].location_id.id
+                for loc in prod.locations:
+                    if loc.stock_qty:
+                        line_vals['location_id']=loc.location_id.id
+                        break
             sale_vals["lines"].append(("create",line_vals))
         for cost in obj.est_costs:
             cost_vals={
@@ -518,6 +593,7 @@ class SaleQuot(Model):
     def onchange_sequence(self, context={}):
         data = context["data"]
         seq_id = data["sequence_id"]
+        context['date']=data['date']
         if not seq_id:
             return None
         while 1:
@@ -575,29 +651,48 @@ class SaleQuot(Model):
                 del_ids.append(cost.id)
         get_model("quot.cost").delete(del_ids)
         #obj.write({"est_costs":[("delete_all",)]})
+        line_sequence = 1
+        settings = get_model("settings").browse(1)
         for line in obj.lines:
             prod=line.product_id
+            cur_line_sequence = line_sequence
+            landed_cost = prod.landed_cost
             if not prod:
                 continue
-            if not prod.purchase_price:
+            if not prod.purchase_price and prod.type != "service":
                 continue
-            if not line.sequence:
+            if not prod.cost_price and prod.type == "service":
                 continue
+            #if not line.sequence:
+                #continue
             if "bundle" == prod.type:
                 continue
+            # update line seqence
+            if not line.sequence:
+                line.write({"sequence": cur_line_sequence})
+                line_sequence += 1
+            else:
+                line_sequence = round(Decimal(line.sequence)) + Decimal(1)
+            # comput cost if product is service
+            if prod.type == "service":
+                if round(prod.cost_price,2) == round(line.unit_price,2):
+                    landed_cost = prod.cost_price
+                else:
+                    landed_cost = prod.cost_price * line.unit_price
             vals={
                 "quot_id": obj.id,
-                "sequence": line.sequence if not line.is_hidden else line.parent_sequence,
+                "sequence": (line.sequence if not line.is_hidden else line.parent_sequence) if line.sequence else cur_line_sequence,
                 "product_id": prod.id,
                 "description": prod.name,
                 "supplier_id": prod.suppliers[0].supplier_id.id if prod.suppliers else None,
                 "list_price": prod.purchase_price,
                 "purchase_price": prod.purchase_price,
-                "landed_cost": prod.landed_cost,
+                #"landed_cost": prod.cost_price if prod.type == "service" else prod.landed_cost,
+                "landed_cost": landed_cost,
                 "purchase_duty_percent": prod.purchase_duty_percent,
                 "purchase_ship_percent": prod.purchase_ship_percent,
                 "qty": line.qty,
-                "currency_id": prod.purchase_currency_id.id,
+                "currency_id": prod.purchase_currency_id.id or settings.currency_id.id,
             }
             get_model("quot.cost").create(vals)
 
@@ -628,19 +723,26 @@ class SaleQuot(Model):
             "est_costs": [],
         }
         seq=0
-        for obj in self.browse(ids):
+        refs=[]
+        for obj in sorted(self.browse(ids),key=lambda obj: obj.number):
+            refs.append(obj.number)
             seq_map={}
             for line in obj.lines:
                 seq+=1
                 seq_map[line.sequence]=seq
+                qty=line.qty or 0
+                unit_price=line.unit_price or 0
+                amt=qty*unit_price
+                disc=amt*(line.discount or 0)/Decimal(100)
                 line_vals = {
                     "sequence": seq,
                     "product_id": line.product_id.id,
                     "description": line.description,
-                    "qty": line.qty,
+                    "qty": qty,
                     "uom_id": line.uom_id.id,
-                    "unit_price": line.unit_price,
-                    "discount": line.discount,
+                    "unit_price": unit_price,
+                    "discount": disc,
+                    "amount": amt,
                     "tax_id": line.tax_id.id,
                 }
                 vals["lines"].append(("create", line_vals))
@@ -657,6 +759,7 @@ class SaleQuot(Model):
                     "currency_id": cost.currency_id.id,
                 }
                 vals["est_costs"].append(("create",cost_vals))
+        vals['ref']=', '.join([ref for ref in refs])
         new_id = self.create(vals, context=context)
         new_obj = self.browse(new_id)
         return {

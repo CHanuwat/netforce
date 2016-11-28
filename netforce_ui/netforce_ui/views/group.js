@@ -60,6 +60,10 @@ var Group=NFView.extend({
             var tag=$el.prop("tagName");
             if (tag=="field") {
                 var name=$el.attr("name");
+                var focus=$el.attr("focus");
+                if(focus && that.options.form_view){
+                    that.options.form_view.focus_field=name;
+                }
                 var model=context.model;
                 var field=model.get_field(name);
                 if (field.type=="one2many") {
@@ -100,6 +104,7 @@ var Group=NFView.extend({
                     nolabel: $el.attr("nolabel"),
                     invisible: $el.attr("invisible"),
                     onchange: $el.attr("onchange"),
+                    click_action: $el.attr("click_action"),
                     count: $el.attr("count")||1,
                     password: $el.attr("password"),
                     size: $el.attr("size"),
@@ -110,17 +115,21 @@ var Group=NFView.extend({
                     condition: $el.attr("condition"),
                     perm: $el.attr("perm"),
                     pkg: $el.attr("pkg"),
+                    mode: $el.attr("mode"),
                     link: $el.attr("link"),
+                    nolink: $el.attr("nolink"), // many2one only
                     view: $el.attr("view"),
                     strong: $el.attr("strong"),
                     select_view_xml: $el.attr("select_view_xml"),
                     create: $el.attr("create"),
                     search_mode: $el.attr("search_mode"),
                     string: $el.attr("string"),
+                    placeholder: $el.attr("placeholder"),
                     method: $el.attr("method"),
                     show_buttons: $el.attr("show_buttons"),
                     auto_save: $el.attr("auto_save"),
                     email: $el.attr("email"),
+                    help: $el.attr("help"),
                     form_layout: form_layout,
                     context: ctx
                 };
@@ -133,12 +142,18 @@ var Group=NFView.extend({
                                 var $el2=$(this);
                                 sub_fields.push({
                                     name: $el2.attr("name"),
+                                    string: $el2.attr("string"),
                                     condition: $el2.attr("condition"),
+                                    click_action: $el2.attr("click_action"),
                                     readonly: $el2.attr("readonly"),
+                                    required: $el2.attr("required"),
+                                    invisible: $el2.attr("invisible"),
                                     onchange: $el2.attr("onchange"),
                                     onfocus: $el2.attr("onfocus"),
+                                    focus: $el2.attr("focus"),
                                     search_mode: $el2.attr("search_mode"),
                                     scale: $el2.attr("scale"),
+                                    create: $el2.attr("create"),
                                     attrs: $el2.attr("attrs")
                                 });
                             });
@@ -147,9 +162,9 @@ var Group=NFView.extend({
                                 readonly: $el.attr("readonly")||that.options.readonly,
                                 default_count: $el.attr("count")||1,
                                 noadd: $el.attr("noadd"),
+                                noremove: $el.attr("noremove"),
                                 context: params.context
                             }
-                            if (opts2.default_count==5) alert("x");
                             var view=Sheet.make_view(opts2);
                             html="<div id=\""+view.cid+"\" class=\"view\"></div>";
                             return html;
@@ -202,7 +217,7 @@ var Group=NFView.extend({
                 var view=Field.make_view(opts);
                 cell.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
                 col+=span;
-                if (that.options.form_view) { // XXX
+                if (that.options.form_view) {
                     that.options.form_view.field_views[name]=view;
                 }
             } else if (tag=="button") {

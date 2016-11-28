@@ -47,8 +47,9 @@ var FieldInteger=NFView.extend({
         var model=this.context.model;
         this.data.value=model.get(name);
         var field=model.get_field(name);
-        this.data.string=field.string;
+        this.data.string=this.options.string||field.string;
         this.data.readonly=field.readonly||this.options.readonly||this.context.readonly;
+        this.data.placeholder=this.options.placeholder;
         var attrs=this.eval_attrs();
         if (attrs.readonly!==undefined) {
             this.data.readonly=attrs.readonly;

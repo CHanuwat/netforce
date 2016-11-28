@@ -21,7 +21,6 @@
 from netforce.model import Model, fields, get_model
 from datetime import *
 from dateutil.relativedelta import *
-from pprint import pprint
 from netforce.access import get_active_company
 
 
@@ -60,9 +59,11 @@ class ReportGL(Model):
         if not date_to:
             date_to = (date.today() + relativedelta(day=31)).strftime("%Y-%m-%d")
         track_id = params.get("track_id") or None
+        track = None
         journal_id = params.get("journal_id") or None
         if track_id:
             track_id = int(track_id)
+            track = get_model('account.track.categ').browse(track_id)
         select_type = params.get("select_type")
         condition = [["type", "!=", "view"]]
         if select_type == "range":
@@ -92,6 +93,8 @@ class ReportGL(Model):
                 condition.append(["id", "in", acc_ids])
         data = {
             "company_name": comp.name,
+            "track_name": track.name if track else None,
+            "track_code": track.code if track else None,
             "date_from": date_from,
             "date_to": date_to,
         }
@@ -109,7 +112,6 @@ class ReportGL(Model):
         data["total_debit"] = sum(acc["debit"] for acc in accounts)
         data["total_credit"] = sum(acc["credit"] for acc in accounts)
         data["total_balance"] = sum(acc["balance"] for acc in accounts)
-        pprint(data)
         return data
 
     def export_detail_xls(self, ids, context={}):

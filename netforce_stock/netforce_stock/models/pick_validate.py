@@ -64,7 +64,7 @@ class PickValidate(Model):
             move = pick.lines[i]
             ########################################
             # prevent to validate stock if it's not enough
-            if st.prevent_validate_neg_stock and pick.type=='out':
+            if st.prevent_validate_neg_stock and pick.type in ('out','internal'):
                 key=(move.product_id.id, None, move.location_from_id.id, None)
                 keys=[key]
                 bals = get_model("stock.balance").compute_key_balances(keys,context={"virt_stock":False})
@@ -84,10 +84,11 @@ class PickValidate(Model):
                     "uom_id": move.uom_id.id,
                     "cost_price": move.cost_price,
                     'cost_price_cur': move.cost_price_cur,
+                    "cost_amount": move.cost_price*remain_qty,
                     "state": move.state,
                 })
             if line.qty:
-                move.write({"qty": line.qty, "uom_id": line.uom_id.id})
+                move.write({"qty": line.qty, "uom_id": line.uom_id.id, "cost_amount":line.qty*move.cost_price})
             else:
                 move.delete()
         if remain_lines:

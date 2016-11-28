@@ -63,7 +63,7 @@ class Picking(Model):
         "landed_costs": fields.Many2Many("landed.cost","Landed Costs",function="get_landed_costs"),
         "messenger_id": fields.Many2One("messenger","Messenger"),
         "avail_messengers": fields.Many2Many("messenger","Available Messengers"),
-        "currency_rate": fields.Decimal("Currency Rate"),
+        "currency_rate": fields.Decimal("Currency Rate",scale=6),
         "product_id2": fields.Many2One("product","Product",store=False,function_search="search_product2",search=True), #XXX ICC
         "sequence": fields.Decimal("Sequence",function="_get_related",function_context={"path":"ship_address_id.sequence"}),
         "delivery_slot_id": fields.Many2One("delivery.slot","Delivery Slot"),
@@ -100,14 +100,14 @@ class Picking(Model):
         if not seq_id:
             return None
         while 1:
-            num = get_model("sequence").get_next_number(seq_id)
+            num = get_model("sequence").get_next_number(seq_id,context=context)
             user_id = get_active_user()
             set_active_user(1)
             res = self.search([["number", "=", num]])
             set_active_user(user_id)
             if not res:
                 return num
-            get_model("sequence").increment_number(seq_id)
+            get_model("sequence").increment_number(seq_id,context)
 
     def _get_type(self, context={}):
         return context.get("pick_type")
@@ -215,22 +215,62 @@ class Picking(Model):
         self.onchange_journal(context=context)
         return data
 
+    def update_number(self,data):
+        journal_id = data["journal_id"]
+        if not journal_id:
+            return data
+        journal=get_model("stock.journal").browse(journal_id)
+        sequence=journal.sequence_id
+        if not sequence:
+            return data
+        prefix=sequence.prefix
+        if not prefix:
+            return data
+        ctx={
+            "pick_type": data["type"],
+            "journal_id": journal_id,
+            'date': data['date'][0:10],
+        }
+        number=data['number']
+        if not number:
+            data["number"] = self._get_number(context=ctx)
+        else:
+            prefix=get_model("sequence").get_prefix(prefix,context=ctx)
+            date_format=False
+            for p in ['m','y','Y']:
+                p2='%('+p+')s'
+                if p2 in sequence.prefix:
+                    date_format=True
+                    break
+            if not date_format:
+                return data
+            pick_id=data.get('id')
+            if pick_id:
+                pick=self.browse(pick_id)
+                if prefix in pick.number:
+                    data['number']=pick.number
+                    return data
+            if prefix not in number:
+                data["number"] = self._get_number(context=ctx)
+        return data
+
     def onchange_journal(self, context={}):
         data = context["data"]
         journal_id = data["journal_id"]
         if not journal_id:
             return
         journal = get_model("stock.journal").browse(journal_id)
-        ctx = {
-            "pick_type": data["type"],
-            "journal_id": data["journal_id"],
-        }
-        data["number"] = self._get_number(ctx)
+        data = self.update_number(data)
         for line in data["lines"]:
             if journal.location_from_id:
                 line["location_from_id"] = journal.location_from_id.id
             if journal.location_to_id:
                 line["location_to_id"] = journal.location_to_id.id
+        return data
+
+    def onchange_date(self, context={}):
+        data = context["data"]
+        data = self.update_number(data)
         return data
 
     def onchange_product(self, context):
@@ -263,6 +303,7 @@ class Picking(Model):
                 "ref": obj.number,
                 "number": number,
                 "contact_id": obj.contact_id.id,
+                "related_id": "%s,%s"%(obj.related_id._model,obj.related_id.id),
                 "lines": [],
             }
             for line in obj.lines:
@@ -308,10 +349,23 @@ class Picking(Model):
                 "contact_id": obj.contact_id.id,
                 "currency_id": obj.currency_id.id,
                 "currency_rate": obj.currency_rate,
+                "related_id": "%s,%s"%(obj.related_id._model,obj.related_id.id),
                 "lines": [],
             }
             for line in obj.lines:
                 prod = line.product_id
+                # get account for purchase invoice
+                purch_acc_id=None
+                if prod:
+                    # 1. get from product
+                    purch_acc_id=prod.purchase_account_id and prod.purchase_account_id.id or None
+                    # 2. if not get from master / parent product
+                    if not purch_acc_id and prod.parent_id:
+                        purch_acc_id=prod.parent_id.purchase_account_id.id
+                    # 3. if not get from product category
+                    categ=prod.categ_id
+                    if categ and not purch_acc_id:
+                        purch_acc_id= categ.purchase_account_id and categ.purchase_account_id.id or None
                 line_vals = {
                     "product_id": line.product_id.id,
                     "description": prod.description or "/",
@@ -319,7 +373,7 @@ class Picking(Model):
                     "uom_id": line.uom_id.id,
                     "unit_price": line.cost_price_cur,
                     "tax_id": prod.purchase_tax_id.id,
-                    "account_id": prod.purchase_account_id.id,
+                    "account_id": purch_acc_id,
                     "amount": line.qty * line.cost_price_cur,
                 }
                 inv_vals["lines"].append(("create", line_vals))
@@ -377,8 +431,6 @@ class Picking(Model):
                 line_vals["cost_price"] = line.cost_price
                 line_vals["cost_amount"] = line.cost_amount
             vals["lines"].append(("create", line_vals))
-        from pprint import pprint
-        pprint(vals)
         new_id = self.create(vals, {"pick_type": vals["type"]})
         if state in ("planned","approved"):
             self.pending([new_id])
@@ -432,6 +484,11 @@ class Picking(Model):
         }
         if obj.related_id:
             vals["related_id"] = "%s,%d" % (obj.related_id._model, obj.related_id.id)
+
+        #in case goods issue copy it's reference
+        else:
+            vals["related_id"] = "%s,%d" % ("stock.picking", obj.id)
+
         for line in obj.lines:
             line_vals = {
                 "product_id": line.product_id.id,
@@ -439,12 +496,13 @@ class Picking(Model):
                 "uom_id": line.uom_id.id,
                 "location_from_id": line.location_to_id.id,
                 "location_to_id": line.location_from_id.id,
+
+                # try copy cost
+                "cost_price": line.cost_price,
+                "cost_price_cur": line.cost_price,
+                "cost_amount": line.cost_price * line.qty, # why we have to compute like this
             }
-            if obj.type == "in":
-                line_vals["unit_price"] = line.unit_price
             vals["lines"].append(("create", line_vals))
-        from pprint import pprint
-        pprint(vals)
         new_id = self.create(vals, {"pick_type": "in"})
         new_obj = self.browse(new_id)
         return {
@@ -497,6 +555,13 @@ class Picking(Model):
             date = vals["date"]
             move_ids = get_model("stock.move").search([["picking_id", "in", ids]])
             get_model("stock.move").write(move_ids, {"date": date})
+        #update service order cost
+        job_ids=[]
+        for obj in self.browse(ids):
+            if obj.related_id._model == 'job':
+                job_ids.append(obj.related_id.id)
+        if job_ids:
+            get_model('job').function_store(job_ids)
 
     def get_qty_total(self, ids, context={}):
         res = {}
@@ -652,6 +717,8 @@ class Picking(Model):
             lot_avail_qtys={}
             for bal in get_model("stock.balance").search_browse([["product_id","=",prod.id],["location_id","=",line.location_from_id.id]]):
                 lot_id=bal.lot_id.id
+                if not lot_id:
+                    continue
                 lot_avail_qtys.setdefault(lot_id,0)
                 lot_avail_qtys[lot_id]+=bal.qty_virt
             print("lot_avail_qtys",lot_avail_qtys)
@@ -742,7 +809,7 @@ class Picking(Model):
                 currency_rate = rate_from / rate_to
         obj.write({"currency_rate":currency_rate})
 
-    def update_cost_price(self, context):
+    def update_line_cost_price(self, context):
         data = context["data"]
         path = context["path"]
         line = get_data_path(data, path, parent=True)
@@ -776,6 +843,33 @@ class Picking(Model):
         cost_amount=cost_price*qty
         line["cost_price"]=cost_price
         line["cost_amount"]=cost_amount
+        return data
+
+    def update_cost_price(self,context={}):
+        data=context['data']
+
+        currency_rate=data.get('currency_rate',1)
+        settings=get_model("settings").browse(1)
+        currency_id = data.get("currency_id",settings.currency_id.id)
+
+        for line in data['lines']:
+            cost_price_cur=line.get("cost_price_cur") or 0
+            cost_price=get_model("currency").convert(cost_price_cur,currency_id,settings.currency_id.id,rate=currency_rate)
+            cost_amount=cost_price*(line['qty'] or 0)
+            line["cost_price"]=cost_price
+            line["cost_amount"]=cost_amount
+        return data
+
+    def onchange_currency(self,context={}):
+        data=context['data']
+        currency_rate=get_model("currency").get_rate([data['currency_id']],date=data['date'],rate_type='buy',context=context) or 1
+        data['currency_rate']=currency_rate
+        data=self.update_cost_price(context)
+        return data
+
+    def onchange_rate(self,context={}):
+        data=context['data']
+        data=self.update_cost_price(context)
         return data
 
 Picking.register()

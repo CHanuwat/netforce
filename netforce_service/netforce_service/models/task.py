@@ -25,8 +25,11 @@ import time
 from netforce import access
 
 def is_holiday(d):
+    settings=get_model("settings").browse(1)
     w=d.weekday()
-    if w==5 or w==6:
+    if w==5 and not settings.work_day_sat:
+        return True
+    if w==6 and not settings.work_day_sun:
         return True
     res=get_model("hr.holiday").search([["date","=",d.strftime("%Y-%m-%d")]])
     if res:
@@ -65,7 +68,7 @@ class Task(Model):
         "related_id": fields.Reference([["job","Job"]],"Related To"),
         "depends_json": fields.Text("Task Dependencies (String)",function="get_depends_json"),
     }
-    _order = "priority,id"
+    _order = "project_id.number,sequence,id"
 
     def _get_number(self, context={}):
         seq_id = get_model("sequence").find_sequence(type="task")
@@ -83,18 +86,9 @@ class Task(Model):
 
     _defaults={
         "date_created": lambda *a: time.strftime("%Y-%m-%d %H:%M:%S"),
-        "state": "new",
+        "state": "open",
         "number": _get_number,
     }
-
-    def get_depends_json(self,ids,context={}):
-        vals={}
-        for obj in self.browse(ids):
-            res=[]
-            for dep in obj.depends:
-                res.append((dep.prev_task_id.id,dep.delay))
-            vals[obj.id]=res
-        return vals
 
     def calc_end_date(self,date_start,duration):
         d=datetime.strptime(date_start,"%Y-%m-%d")
@@ -111,13 +105,15 @@ class Task(Model):
         data=context.get("data",{})
         date_start=data["date_start"]
         duration=data.get("duration",0)
-        data["date_end"]=self.calc_end_date(date_start,duration)
+        if date_start and duration:
+            data["date_end"]=self.calc_end_date(date_start,duration)
         return data
 
     def get_end_date(self,ids,context={}):
         vals={}
         for obj in self.browse(ids):
-            vals[obj.id]=self.calc_end_date(obj.date_start,obj.duration)
+            if obj.date_start and obj.duration:
+                vals[obj.id]=self.calc_end_date(obj.date_start,obj.duration)
         return vals
 
     def create(self,vals,*args,**kw):
@@ -128,5 +124,24 @@ class Task(Model):
     def write(self,ids,*args,**kw):
         super().write(ids,*args,**kw)
         self.function_store(ids)
+
+    def add_link(self,source_id,target_id,context={}):
+        vals={
+            "prev_task_id": source_id,
+            "task_id": target_id,
+        }
+        get_model("task.depend").create(vals)
+
+    def delete_link(self,link_ids,context={}):
+        get_model("task.depend").delete(link_ids)
+
+    def get_depends_json(self,ids,context={}):
+        vals={}
+        for obj in self.browse(ids):
+            res=[]
+            for dep in obj.depends:
+                res.append((dep.id,dep.prev_task_id.id,dep.delay))
+            vals[obj.id]=res
+        return vals
 
 Task.register()

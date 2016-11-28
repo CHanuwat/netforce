@@ -104,6 +104,7 @@
             <separator string="Purchasing"/>
             <field name="purchase_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
             <field name="purchase_tax_id"/>
+            <field name="purchase_return_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
             <separator string="Sales"/>
             <field name="sale_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
             <field name="sale_tax_id"/>
@@ -113,8 +114,8 @@
             <separator string="Costing"/>
             <field name="cost_method"/>
             <field name="cost_price"/>
-            <field name="stock_in_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
-            <field name="stock_out_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
+            <field name="cogs_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
+            <field name="stock_account_id" condition='[["type","!=","view"],["company_id","=",context.company_id]]'/>
         </tab>
         <tab string="Inventory">
             <field name="weight"/>

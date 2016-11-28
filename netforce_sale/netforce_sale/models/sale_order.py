@@ -19,7 +19,7 @@
 # OR OTHER DEALINGS IN THE SOFTWARE.
 
 from netforce.model import Model, fields, get_model
-from netforce.utils import get_data_path
+from netforce.utils import get_data_path, roundup
 import time
 from netforce.access import get_active_user, set_active_user
 from netforce.access import get_active_company, check_permission_other, set_active_company
@@ -49,7 +49,7 @@ class SaleOrder(Model):
         "amount_total_words": fields.Char("Total Words", function="get_amount_total_words"),
         "amount_total_cur": fields.Decimal("Total", function="get_amount", function_multi=True, store=True),
         "qty_total": fields.Decimal("Total", function="get_qty_total"),
-        "currency_id": fields.Many2One("currency", "Currency", required=True),
+        "currency_id": fields.Many2One("currency", "Currency", required=True, search=True),
         "quot_id": fields.Many2One("sale.quot", "Quotation", search=True), # XXX: deprecated
         "user_id": fields.Many2One("base.user", "Owner", search=True),
         "tax_type": fields.Selection([["tax_ex", "Tax Exclusive"], ["tax_in", "Tax Inclusive"], ["no_tax", "No Tax"]], "Tax Type", required=True),
@@ -77,12 +77,12 @@ class SaleOrder(Model):
         "production_orders": fields.One2Many("production.order", "sale_id", "Production Orders"),
         "other_info": fields.Text("Other Information"),
         "costs": fields.One2Many("sale.cost", "sale_id", "Costs"),
-        "est_cost_total": fields.Decimal("Estimated Cost Total", function="get_profit", function_multi=True, store=True),
-        "est_profit": fields.Decimal("Estimated Profit", function="get_profit", function_multi=True, store=True),
-        "est_profit_percent": fields.Decimal("Estimated Profit Percent", function="get_profit", function_multi=True, store=True),
-        "act_cost_total": fields.Decimal("Actual Cost Total", function="get_profit", function_multi=True, store=True),
-        "act_profit": fields.Decimal("Actual Profit", function="get_profit", function_multi=True, store=True),
-        "act_profit_percent": fields.Decimal("Actual Profit Percent", function="get_profit", function_multi=True, store=True),
+        "est_cost_total": fields.Decimal("Estimated Cost Total", function="get_profit", function_multi=True, store=True), # XXX: deprecated
+        "est_profit": fields.Decimal("Estimated Profit", function="get_profit", function_multi=True, store=True), # XXX: deprecated
+        "est_profit_percent": fields.Decimal("Estimated Profit Percent", function="get_profit", function_multi=True, store=True), # XXX: deprecated
+        "act_cost_total": fields.Decimal("Actual Cost Total", function="get_profit", function_multi=True, store=True), # XXX: deprecated
+        "act_profit": fields.Decimal("Actual Profit", function="get_profit", function_multi=True, store=True), # XXX: deprecated
+        "act_profit_percent": fields.Decimal("Actual Profit Percent", function="get_profit", function_multi=True, store=True), # XXX: deprecated
         "company_id": fields.Many2One("company", "Company"),
         "production_status": fields.Json("Production", function="get_production_status"),
         "overdue": fields.Boolean("Overdue", function="get_overdue", function_search="search_overdue"),
@@ -95,9 +95,10 @@ class SaleOrder(Model):
         "job_template_id": fields.Many2One("job.template", "Service Order Template"),
         "jobs": fields.One2Many("job", "related_id", "Service Orders"),
         "agg_amount_total": fields.Decimal("Total Amount", agg_function=["sum", "amount_total"]),
+        "agg_amount_total_cur": fields.Decimal("Total Amount (Converted)", agg_function=["sum", "amount_total_cur"]),
         "agg_amount_subtotal": fields.Decimal("Total Amount w/o Tax", agg_function=["sum", "amount_subtotal"]),
-        "agg_est_profit": fields.Decimal("Total Estimated Profit", agg_function=["sum", "est_profit"]),
-        "agg_act_profit": fields.Decimal("Total Actual Profit", agg_function=["sum", "act_profit"]),
+        "agg_est_profit": fields.Decimal("Total Estimated Profit", agg_function=["sum", "est_profit_amount"]),
+        "agg_act_profit": fields.Decimal("Total Actual Profit", agg_function=["sum", "act_profit_amount"]),
         "year": fields.Char("Year", sql_function=["year", "date"]),
         "quarter": fields.Char("Quarter", sql_function=["quarter", "date"]),
         "month": fields.Char("Month", sql_function=["month", "date"]),
@@ -106,12 +107,12 @@ class SaleOrder(Model):
         "sale_channel_id": fields.Many2One("sale.channel", "Sales Channel",search=True),
         "related_id": fields.Reference([["sale.quot", "Quotation"], ["ecom.cart", "Ecommerce Cart"], ["purchase.order", "Purchase Order"]], "Related To"),
         "est_costs": fields.One2Many("sale.cost","sale_id","Costs"),
-        "est_cost_amount": fields.Float("Est. Cost Amount", function="get_est_profit", function_multi=True),
-        "est_profit_amount": fields.Float("Est. Profit Amount", function="get_est_profit", function_multi=True),
-        "est_margin_percent": fields.Float("Est. Margin %", function="get_est_profit", function_multi=True),
-        "act_cost_amount": fields.Float("Act. Cost Amount", function="get_act_profit", function_multi=True),
-        "act_profit_amount": fields.Float("Act. Profit Amount", function="get_act_profit", function_multi=True),
-        "act_margin_percent": fields.Float("Act. Margin %", function="get_act_profit", function_multi=True),
+        "est_cost_amount": fields.Float("Est. Cost Amount", function="get_est_profit", function_multi=True, store=True),
+        "est_profit_amount": fields.Float("Est. Profit Amount", function="get_est_profit", function_multi=True, store=True),
+        "est_margin_percent": fields.Float("Est. Margin %", function="get_est_profit", function_multi=True, store=True),
+        "act_cost_amount": fields.Float("Act. Cost Amount", function="get_act_profit", function_multi=True, store=True),
+        "act_profit_amount": fields.Float("Act. Profit Amount", function="get_act_profit", function_multi=True, store=True),
+        "act_margin_percent": fields.Float("Act. Margin %", function="get_act_profit", function_multi=True, store=True),
         "track_id": fields.Many2One("account.track.categ","Tracking Code"),
         "track_entries": fields.One2Many("account.track.entry",None,"Tracking Entries",function="get_track_entries",function_write="write_track_entries"),
         "track_balance": fields.Decimal("Tracking Balance",function="_get_related",function_context={"path":"track_id.balance"}),
@@ -142,6 +143,20 @@ class SaleOrder(Model):
         settings = get_model("settings").browse(1)
         return settings.currency_id.id
 
+    def _get_currency_rates(self,context={}):
+        settings = get_model("settings").browse(1)
+        lines=[]
+        date = time.strftime("%Y-%m-%d")
+        line_vals={
+            "currency_id": settings.currency_id.id,
+            "rate": settings.currency_id and settings.currency_id.get_rate(date,"sell") or 1
+        }
+        if context.get("is_create"):
+            lines.append(('create',line_vals))
+        else:
+            lines.append(line_vals)
+        return lines 
+
     _defaults = {
         "state": "draft",
         "date": lambda *a: time.strftime("%Y-%m-%d"),
@@ -150,6 +165,7 @@ class SaleOrder(Model):
         "tax_type": "tax_ex",
         "user_id": lambda *a: get_active_user(),
         "company_id": lambda *a: get_active_company(),
+        "currency_rates": _get_currency_rates,
     }
     _order = "date desc,number desc"
 
@@ -168,6 +184,7 @@ class SaleOrder(Model):
         return cond
 
     def create(self, vals, context={}):
+        context['is_create']=True #send to function _get_currency_rates
         id = super(SaleOrder, self).create(vals, context)
         self.function_store([id])
         quot_id = vals.get("quot_id")
@@ -237,9 +254,9 @@ class SaleOrder(Model):
                     subtotal -= line.amount
             vals["amount_subtotal"] = subtotal
             vals["amount_tax"] = tax
-            vals["amount_total"] = subtotal + tax
+            vals["amount_total"] = (subtotal + tax)
             vals["amount_total_cur"] = get_model("currency").convert(
-                vals["amount_total"], obj.currency_id.id, settings.currency_id.id)
+                vals["amount_total"], obj.currency_id.id, settings.currency_id.id, rate_type="sell", date=obj.date)
             vals["amount_total_discount"] = discount
             res[obj.id] = vals
         return res
@@ -316,6 +333,7 @@ class SaleOrder(Model):
             if not line:
                 continue
             amt = (line.get("qty") or 0) * (line.get("unit_price") or 0)
+            amt = roundup(amt)
             if line.get("discount"):
                 disc = amt * line["discount"] / Decimal(100)
                 amt -= disc
@@ -330,6 +348,7 @@ class SaleOrder(Model):
                 data["amount_tax"] += tax
             else:
                 tax = 0
+            amt=Decimal(round(float(amt),2)) # # convert to float because Decimal gives wrong rounding
             if tax_type == "tax_in":
                 data["amount_subtotal"] += amt - tax
             else:
@@ -339,11 +358,6 @@ class SaleOrder(Model):
 
     def onchange_product(self, context):
         data = context["data"]
-        contact_id = data.get("contact_id")
-        if contact_id:
-            contact = get_model("contact").browse(contact_id)
-        else:
-            contact = None
         path = context["path"]
         line = get_data_path(data, path, parent=True)
         prod_id = line.get("product_id")
@@ -353,10 +367,12 @@ class SaleOrder(Model):
         line["description"] = prod.description or "/"
         line["qty"] = 1
         line["uom_id"] = prod.sale_uom_id.id or prod.uom_id.id
+        line["qty_stock"] = 0
         pricelist_id = data["price_list_id"]
         price = None
         if pricelist_id:
             price = get_model("price.list").get_price(pricelist_id, prod.id, 1)
+            line['discount'] = get_model("price.list").get_discount(pricelist_id, prod.id, 1)
             price_list = get_model("price.list").browse(pricelist_id)
             price_currency_id = price_list.currency_id.id
         if price is None:
@@ -371,6 +387,16 @@ class SaleOrder(Model):
             line["tax_id"] = prod.sale_tax_id.id
         if prod.location_id:
             line["location_id"] = prod.location_id.id
+        elif prod.locations:
+            line["location_id"] = prod.locations[0].location_id.id
+            for loc in prod.locations:
+                if loc.stock_qty:
+                    line['location_id']=loc.location_id.id
+                    break
+        if "location_id" in line and line["location_id"]:
+            qty_stock = get_model("stock.balance").search_browse([["product_id","=",prod_id],["location_id","=",line["location_id"]]])
+            if len(qty_stock) > 0:
+                line["qty_stock"] = qty_stock[0].qty_phys
         data = self.update_amounts(context)
         return data
 
@@ -400,6 +426,17 @@ class SaleOrder(Model):
         data = self.update_amounts(context)
         return data
 
+    def onchange_location(self, context):
+        data = context["data"]
+        path = context["path"]
+        line = get_data_path(data, path, parent=True)
+        line["qty_stock"] = 0
+        if "product_id" in line and line["product_id"]:
+            qty_stock = get_model("stock.balance").search_browse([["product_id","=",line["product_id"]],["location_id","=",line["location_id"]]])
+            if len(qty_stock) > 0:
+                line["qty_stock"] = qty_stock[0].qty_phys
+        return data
+
     def onchange_uom(self, context):
         data = context["data"]
         path = context["path"]
@@ -415,6 +452,28 @@ class SaleOrder(Model):
         if prod.sale_price is not None:
             line["unit_price"] = prod.sale_price * uom.ratio / prod.uom_id.ratio
         data = self.update_amounts(context)
+
+        #update est .....
+        sale = self.browse(int(data['id']))
+        item_costs=Decimal(0)
+        for cost in sale.est_costs:
+            k=(sale.id,cost.sequence)
+            amt=cost.amount or 0
+            if cost.currency_id:
+                rate=sale.get_relative_currency_rate(cost.currency_id.id)
+                amt=amt*rate
+            item_costs+=amt
+        cost=item_costs
+        profit=line['amount']-Decimal(cost)
+        margin=Decimal(profit)*100/Decimal(line['amount']) if line['amount'] else None
+        amount={
+            "est_cost_amount": cost,
+            "est_profit_amount": profit,
+            "est_margin_percent": margin,
+        }
+        line['est_cost_amount'] = amount['est_cost_amount']
+        line['est_profit_amount'] = amount['est_profit_amount']
+        line['est_margin_percent'] = amount['est_margin_percent']
         return data
 
     def get_qty_to_deliver(self, ids):
@@ -483,7 +542,7 @@ class SaleOrder(Model):
                 continue
             if line.qty <= 0:
                 continue
-            qty_remain = (line.qty_stock or line.qty) - line.qty_delivered
+            qty_remain = line.qty - line.qty_delivered
             if qty_remain <= 0:
                 continue
             line_vals = {
@@ -553,11 +612,26 @@ class SaleOrder(Model):
                     remain_qty = line.qty - line.qty_invoiced
                     if remain_qty <= 0:
                         continue
+
+                    # TODO: this get account should call from product.get_account()["sale_account_id"]
+
                     sale_acc_id=None
                     if prod:
-                        sale_acc_id=prod.sale_account_id.id
+                        #1. get account from product
+                        sale_acc_id=prod.sale_account_id and prod.sale_account_id.id or None
+
+                        # 2. if not get from master/parent product
                         if not sale_acc_id and prod.parent_id:
                             sale_acc_id=prod.parent_id.sale_account_id.id
+                        # 3. if not get from product category
+                        categ=prod.categ_id
+                        if categ and not sale_acc_id:
+                            sale_acc_id=categ.sale_account_id and categ.sale_account_id.id or None
+
+                    #if not sale_acc_id:
+                        #raise Exception("Missing sale account for product [%s] " % prod.name )
+
+
                     line_vals = {
                         "product_id": prod.id,
                         "description": line.description,
@@ -568,7 +642,7 @@ class SaleOrder(Model):
                         "discount_amount": line.discount_amount,
                         "account_id": sale_acc_id,
                         "tax_id": line.tax_id.id,
-                        "amount": line.qty*line.unit_price*(1-(line.discount or Decimal(0))/100)-(line.discount_amount or Decimal(0)),
+                        "amount": remain_qty*line.unit_price*(1-(line.discount or Decimal(0))/100)-(line.discount_amount or Decimal(0)),
                     }
                     inv_vals["lines"].append(("create", line_vals))
                     if line.promotion_amount:
@@ -625,7 +699,7 @@ class SaleOrder(Model):
             is_delivered = True
             for line in obj.lines:
                 prod = line.product_id
-                if prod.type not in ("stock", "consumable", "bundle"):
+                if prod.type not in ("stock", "consumable", "bundle", None):
                     continue
                 remain_qty = (line.qty_stock or line.qty) - line.qty_delivered
                 if remain_qty > 0:
@@ -751,7 +825,7 @@ class SaleOrder(Model):
             if not prod.suppliers:
                 raise Exception("Missing supplier for product '%s'" % prod.name)
             supplier_id = prod.suppliers[0].supplier_id.id
-            suppliers.setdefault(supplier_id, []).append((prod.id, line.qty, line.uom_id.id))
+            suppliers.setdefault(supplier_id, []).append((prod.id, line.qty, line.uom_id.id, line.location_id.id))
         if not suppliers:
             raise Exception("No purchase orders to create")
         po_ids = []
@@ -761,7 +835,7 @@ class SaleOrder(Model):
                 "ref": obj.number,
                 "lines": [],
             }
-            for prod_id, qty, uom_id in lines:
+            for prod_id, qty, uom_id, location_id in lines:
                 prod = get_model("product").browse(prod_id)
                 line_vals = {
                     "product_id": prod_id,
@@ -771,6 +845,7 @@ class SaleOrder(Model):
                     "unit_price": prod.purchase_price or 0,
                     "tax_id": prod.purchase_tax_id.id,
                     "sale_id": obj.id,
+                    'location_id': location_id,
                 }
                 purch_vals["lines"].append(("create", line_vals))
             po_id = get_model("purchase.order").create(purch_vals)
@@ -918,6 +993,7 @@ class SaleOrder(Model):
 
     def onchange_sequence(self, context={}):
         data = context["data"]
+        context['date'] = data['date']
         seq_id = data["sequence_id"]
         if not seq_id:
             return None
@@ -972,7 +1048,48 @@ class SaleOrder(Model):
         tmpl = obj.job_template_id
         if not tmpl:
             raise Exception("Missing service order template in sales order")
-        job_id = tmpl.create_job(sale_id=obj.id)
+        #job_id = tmpl.create_job(sale_id=obj.id)
+        sale = get_model("sale.order").browse(obj.id)
+        contact_id = sale.contact_id.id
+        vals = {
+            "number": get_model("job")._get_number(),
+            "contact_id": contact_id,
+            "template_id": obj.job_template_id.id,
+            "service_type_id": obj.job_template_id.service_type_id.id,
+            "state": "planned",
+            "related_id": "sale.order,%s" % obj.id,
+            "lines": [],
+        }
+        template_products = []
+        for line in obj.job_template_id.lines:
+            line_vals = {
+                "sequence": line.sequence,
+                "type": line.type,
+                "product_id": line.product_id.id,
+                "description": line.description,
+                "qty": line.qty,
+                "uom_id": line.uom_id.id,
+                "unit_price": line.unit_price,
+                "amount": line.amount,
+                "payment_type": "job",
+            }
+            vals["lines"].append(("create", line_vals))
+            template_products.append((line.product_id.id,line.description))
+        for line in obj.lines:
+            if (line.product_id.id,line.description) not in template_products:
+                line_vals = {
+                    "sequence": line.sequence,
+                    "type": "parts" if line.product_id.type == "stockable" else "other",
+                    "product_id": line.product_id.id,
+                    "description": line.description,
+                    "qty": line.qty,
+                    "uom_id": line.uom_id.id,
+                    "unit_price": line.unit_price,
+                    "amount": line.amount,
+                    "payment_type": "job",
+                }
+                vals["lines"].append(("create", line_vals))
+        job_id = get_model("job").create(vals)
         job = get_model("job").browse(job_id)
         return {
             "flash": "Service order %s created from sales order %s" % (job.number, obj.number),
@@ -1114,8 +1231,9 @@ class SaleOrder(Model):
             cost=0
             for line in obj.track_entries:
                 cost-=line.amount
-            profit=obj.amount_subtotal-cost
-            margin=profit*100/obj.amount_subtotal if obj.amount_subtotal else None
+            subtotal=obj.amount_subtotal or 0
+            profit=subtotal-cost
+            margin=profit*100/subtotal if subtotal else None
             vals[obj.id] = {
                 "act_cost_amount": cost,
                 "act_profit_amount": profit,
@@ -1258,6 +1376,7 @@ class SaleOrder(Model):
                 "tax_type":obj.tax_type,
                 "bill_address_id":obj.bill_address_id.id,
                 "ship_address_id":obj.ship_address_id.id,
+                "orig_sale_id": obj.id,
                 "lines":[],
             }
             for line in obj.lines:
@@ -1285,5 +1404,16 @@ class SaleOrder(Model):
             "flash": "Sale Return %s created from sales order %s" % (sale.number, obj.number),
             "order_id": sale_id,
         }
+
+    def get_template_sale_form(self, ids, context={}):
+        #obj = self.browse(ids)[0]
+        return "sale_form"
+
+    def update_cost_amount(self,context={}):
+        data=context['data']
+        path=context['path']
+        line=get_data_path(data,path,parent=True)
+        line['amount']=(line['qty'] or 0) *(line['landed_cost'] or 0)
+        return data
 
 SaleOrder.register()

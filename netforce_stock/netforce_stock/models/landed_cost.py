@@ -18,14 +18,17 @@
 # OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 # OR OTHER DEALINGS IN THE SOFTWARE.
 
-from netforce.model import Model, fields, get_model
 import time
-from netforce.utils import get_data_path
+
+from netforce.model import Model, fields, get_model
+from netforce.access import get_active_company
 
 class LandedCost(Model):
     _name = "landed.cost"
     _name_field = "number"
     _string = "Landed Costs"
+    _audit_log = True
+    _multi_company=True
     _fields = {
         "number": fields.Char("Number",required=True,search=True),
         "date": fields.DateTime("Date",required=True,search=True),
@@ -42,6 +45,7 @@ class LandedCost(Model):
         "alloc_cost_type": fields.Selection([["est_ship","Est Shipping"],["est_duty","Estimate Duty"],["act_ship","Actual Shipping"],["act_duty","Actual Duty"]],"Cost Type"),
         "reverse_move_id": fields.Many2One("account.move","Reverse Journal Entry"),
         "stock_moves": fields.One2Many("stock.move","related_id","Stock Movements"),
+        'company_id': fields.Many2One("company","Company"),
     }
 
     def _get_number(self, context={}):
@@ -60,6 +64,7 @@ class LandedCost(Model):
         "date": lambda *a: time.strftime("%Y-%m-%d %H:%M:%S"),
         "cost_alloc_method": "amount",
         "number": _get_number,
+        'company_id': lambda *a: get_active_company(),
     }
 
     def post(self, ids, context={}):
@@ -105,7 +110,7 @@ class LandedCost(Model):
                 inv_amt=alloc.amount
                 var_amt=0
             else:
-                ratio=min(alloc.qty_stock_lc/alloc.qty_stock_gr,1)
+                ratio=min(alloc.qty_stock_lc/alloc.qty_stock_gr,1) if alloc.qty_stock_gr else 0 # XXX
                 inv_amt=alloc.amount*ratio
                 var_amt=alloc.amount*(1-ratio)
             if inv_amt:
@@ -146,7 +151,7 @@ class LandedCost(Model):
             move=line.move_id
             if not move.qty:
                 raise Exception("Missing qty in stock movement %s"%move.number)
-            ratio=min(line.qty_stock_lc/line.qty_stock_gr,1)
+            ratio=min(line.qty_stock_lc/line.qty_stock_gr,1) if line.qty_stock_gr else 0
             journal_id=settings.landed_cost_journal_id.id
             if not journal_id:
                 raise Exception("Missing landed cost journal")
@@ -266,7 +271,7 @@ class LandedCost(Model):
             if obj.alloc_type=="amount":
                 alloc_amt=obj.alloc_amount*(line.cost_amount or 0)/total_amt
             elif obj.alloc_type=="qty":
-                alloc_amt=obj.alloc_amount*line.qty/total_qty
+                alloc_amt=obj.alloc_amount*line.qty/total_qty if total_qty else 0
             vals={
                 obj.alloc_cost_type: alloc_amt,
             }

@@ -100,7 +100,7 @@ class Settings(Model):
         "version": fields.Char("Version"),
         "tax_no": fields.Char("Tax ID Number", multi_company=True),
         "branch_no": fields.Char("Branch Number", multi_company=True),
-        "addresses": fields.One2Many("address", "settings_id", "Addresses"),
+        "addresses": fields.One2Many("address", "settings_id", "Addresses", multi_company=True),
         "date_format": fields.Char("Date Format"),
         "use_buddhist_date": fields.Boolean("Use Buddhist Date"),
         "phone": fields.Char("Phone", multi_company=True),
@@ -147,9 +147,13 @@ class Settings(Model):
         "purchase_copy_picking": fields.Boolean("Auto-copy purchase orders to goods receipt"),
         "purchase_copy_invoice": fields.Boolean("Auto-copy purchase orders to supplier invoice"),
         "lot_expiry_journal_id": fields.Many2One("stock.journal", "Lot Expiry Journal"),
+        "work_day_sat": fields.Boolean("Work On Saturday"),
+        "work_day_sun": fields.Boolean("Work On Sunday"),
     }
     _defaults = {
         "package": "free",
+        "stock_cost_mode": "periodic",
+        'stock_cost_auto_compute': True,
     }
 
     def get_address_str(self, ids, context={}):

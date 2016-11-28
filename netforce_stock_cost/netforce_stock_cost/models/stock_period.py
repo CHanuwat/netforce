@@ -21,10 +21,14 @@
 from netforce.model import Model, fields, get_model
 from datetime import *
 from dateutil.relativedelta import *
+from netforce import access
 
 class StockPeriod(Model):
     _name="stock.period"
     _string="Stock Period"
+    _multi_company = True
+    _key = ["company_id", "number"]
+    _name_field="number"
     _fields={
         "number": fields.Char("Number",required=True,search=True),
         "date_from": fields.Date("Date From",required=True),
@@ -35,11 +39,14 @@ class StockPeriod(Model):
         "stock_moves": fields.One2Many("stock.move","period_id","Posted Stock Movements"),
         "num_stock_moves": fields.Integer("Number stock movements",function="get_num_stock_moves",function_multi=True),
         "num_posted_stock_moves": fields.Integer("Number posted stock movements",function="get_num_stock_moves",function_multi=True),
+        "company_id": fields.Many2One("company", "Company"),
     }
+    _order="date_from desc,id desc"
     _defaults={
         "state": "draft",
         "date_from": lambda *a: date.today().strftime("%Y-%m-01"),
         "date_to": lambda *a: (date.today()+relativedelta(day=31)).strftime("%Y-%m-%d"),
+        "company_id": lambda *a: access.get_active_company(),
     }
 
     def post(self,ids,context={}):
@@ -49,15 +56,31 @@ class StockPeriod(Model):
         for move in get_model("stock.move").browse(move_ids):
             prod=move.product_id
             acc_from_id=move.location_from_id.account_id.id
+            if move.location_from_id.type=="customer":
+                if prod.cogs_account_id:
+                    acc_from_id=prod.cogs_account_id.id
+                elif prod.categ_id and prod.categ_id.cogs_account_id:
+                    acc_from_id=prod.categ_id.cogs_account_id.id
+            elif move.location_from_id.type=="internal":
+                if prod.stock_account_id:
+                    acc_from_id=prod.stock_account_id.id
+                elif prod.categ_id and prod.categ_id.stock_account_id:
+                    acc_from_id=prod.categ_id.stock_account_id.id
             if not acc_from_id:
-                acc_from_id=prod.stock_in_account_id.id
-            if not acc_from_id:
-                raise Exception("Missing input account for stock transaction %s (date=%s, ref=%s, product=%s)"%(move.id,move.date,move.ref,prod.name))
+                raise Exception("Missing input account for stock movement %s (date=%s, ref=%s, product=%s)"%(move.id,move.date,move.ref,prod.name))
             acc_to_id=move.location_to_id.account_id.id
+            if move.location_to_id.type=="customer":
+                if prod.cogs_account_id:
+                    acc_to_id=prod.cogs_account_id.id
+                elif prod.categ_id and prod.categ_id.cogs_account_id:
+                    acc_to_id=prod.categ_id.cogs_account_id.id
+            elif move.location_to_id.type=="internal":
+                if prod.stock_account_id:
+                    acc_to_id=prod.stock_account_id.id
+                elif prod.categ_id and prod.categ_id.stock_account_id:
+                    acc_to_id=prod.categ_id.stock_account_id.id
             if not acc_to_id:
-                acc_to_id=prod.stock_out_account_id.id
-            if not acc_to_id:
-                raise Exception("Missing output account for stock transaction %s (date=%s, ref=%s, product=%s)"%(move.id,move.date,move.ref,prod.name))
+                raise Exception("Missing output account for stock movement %s (date=%s, ref=%s, product=%s)"%(move.id,move.date,move.ref,prod.name))
             if move.cost_price is None:
                 raise Exception("Unknown cost price for stock transaction %s (date=%s, ref=%s, product=%s)"%(move.id,move.date,move.ref,prod.name))
             track_from_id=move.location_from_id.track_id.id
@@ -84,6 +107,7 @@ class StockPeriod(Model):
             "narration": desc,
             "date": obj.date_to,
             "lines": [("create",vals) for vals in lines],
+            'related_id': 'stock.period,%s'%obj.id,
         }
         from pprint import pprint
         pprint(vals)
@@ -122,5 +146,5 @@ class StockPeriod(Model):
                 "num_posted_stock_moves": num_posted_stock_moves,
             }
         return vals
-            
+
 StockPeriod.register()

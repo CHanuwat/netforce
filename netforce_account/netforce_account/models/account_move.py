@@ -45,10 +45,11 @@ class Move(Model):
         "number": fields.Char("Number", search=True, required=True),
         "default_line_desc": fields.Boolean("Default narration to line description"),
         "comments": fields.One2Many("message", "related_id", "Comments"),
-        "related_id": fields.Reference([["account.invoice", "Invoice"], ["account.payment", "Payment"], ["account.transfer", "Transfer"], ["hr.expense", "Expense Claim"], ["service.contract", "Service Contract"], ["pawn.loan", "Loan"], ["landed.cost","Landed Cost"], ["stock.picking","Stock Picking"]], "Related To"),
+        "related_id": fields.Reference([["account.invoice", "Invoice"], ["account.payment", "Payment"], ["account.transfer", "Transfer"], ["hr.expense", "Expense Claim"], ["service.contract", "Service Contract"], ["pawn.loan", "Loan"], ["landed.cost","Landed Cost"], ["stock.picking","Stock Picking"], ['account.advance','Advance'], ['account.advance.clear','Advance Clear']], "Related To"),
         "company_id": fields.Many2One("company", "Company"),
         "track_entries": fields.One2Many("account.track.entry","move_id","Tracking Entries"),
         "difference" : fields.Float("Difference",function="get_difference",function_multi=True),
+        "verified": fields.Boolean("Verified",search=True),
     }
 
     def _get_journal(self, context={}):
@@ -84,7 +85,7 @@ class Move(Model):
     }
     _order = "date desc,id desc"
 
-    def get_difference(self, ids, context): 
+    def get_difference(self, ids, context):
         vals = {}
         for obj in self.browse(ids):
             vals[obj.id] = {
@@ -175,9 +176,9 @@ class Move(Model):
                 total_credit += line.credit
                 if line.tax_comp_id and not line.tax_date:
                     line.write({"tax_date": line.move_id.date})
-                if acc.currency_id.id != settings.currency_id.id and line.amount_cur is None:
+                if acc.currency_id.id != settings.currency_id.id and not line.amount_cur:
                     raise Exception("Missing currency amount for account %s" % line.account_id.name_get()[0][1])
-                if line.amount_cur is not None and acc.currency_id.id == settings.currency_id.id:
+                if line.amount_cur and acc.currency_id.id == settings.currency_id.id:
                     raise Exception("Currency amount for account %s should be empty" % line.account_id.name_get()[0][1])
             if abs(total_debit - total_credit) != 0:
                 print("NOT BALANCED total_debit=%s total_credit=%s" % (total_debit, total_credit))
@@ -208,19 +209,28 @@ class Move(Model):
 
     def create_track_entries(self, ids, context={}):
         obj=self.browse(ids[0])
+        settings=get_model("settings").browse(1)
         for line in obj.lines:
             if line.track_id:
+                amt=line.credit-line.debit
+                if line.track_id.currency_id:
+                    amt=get_model("currency").convert(amt,settings.currency_id.id,line.track_id.currency_id.id,date=obj.date)
                 vals={
+                    "date": obj.date,
                     "track_id": line.track_id.id,
-                    "amount": line.credit-line.debit,
+                    "amount": amt,
                     "description": line.description,
                     "move_id": obj.id,
                 }
                 get_model("account.track.entry").create(vals)
             if line.track2_id:
+                amt=line.credit-line.debit
+                if line.track2_id.currency_id:
+                    amt=get_model("currency").convert(amt,settings.currency_id.id,line.track2_id.currency_id.id,date=obj.date)
                 vals={
+                    "date": obj.date,
                     "track_id": line.track2_id.id,
-                    "amount": line.credit-line.debit,
+                    "amount": amt,
                     "description": line.description,
                     "move_id": obj.id,
                 }
@@ -422,6 +432,12 @@ class Move(Model):
             "pages": pages,
             "logo": get_file_path(settings.logo),  # XXX: remove when render_odt fixed
         }
+
+    def get_report_data(self,ids=None,context={}):
+        if ids is not None:  # for new templates
+            return super().get_report_data(ids, context=context)
+        ids = context["ids"]
+        return self.get_data(ids,context)
 
     def reverse(self, ids, context={}):
         obj = self.browse(ids)[0]

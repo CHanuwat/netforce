@@ -23,7 +23,6 @@ from netforce.access import get_active_company
 from netforce import database
 from datetime import *
 from dateutil.relativedelta import *
-from pprint import pprint
 
 
 class FixedAsset(Model):
@@ -41,7 +40,7 @@ class FixedAsset(Model):
         "track2_id": fields.Many2One("account.track.categ", "Tracking-2", condition=[["type", "=", "2"]], search=True),
         "price_purchase": fields.Decimal("Purchase Price", required=True),
         "description": fields.Text("Description"),
-        "type_id": fields.Many2One("account.fixed.asset.type", "Asset Type", required=True),
+        "type_id": fields.Many2One("account.fixed.asset.type", "Asset Type", required=True, search=True),
         "dep_rate": fields.Decimal("Depreciation Rate (%)", required=True),
         "dep_method": fields.Selection([["line", "Straight Line"], ["decline", "Declining Balance"]], "Depreciation Method", required=True, search=True),
         "accum_dep_account_id": fields.Many2One("account.account", "Accum. Depr. Account", required=True, search=True),
@@ -63,11 +62,11 @@ class FixedAsset(Model):
         if not seq_id:
             return None
         while 1:
-            num = get_model("sequence").get_next_number(seq_id)
+            num = get_model("sequence").get_next_number(seq_id,context)
             res = self.search([["number", "=", num]])
             if not res:
                 return num
-            get_model("sequence").increment_number(seq_id)
+            get_model("sequence").increment_number(seq_id,context)
 
     _defaults = {
         "state": "pending",
@@ -251,7 +250,6 @@ class FixedAsset(Model):
                     "debit": amt > 0 and amt or 0,
                     "credit": amt < 0 and -amt or 0,
                 }))
-            pprint(move_vals)
             move_id = get_model("account.move").create(move_vals)
             get_model("account.move").post([move_id])
             for period in get_model("account.fixed.asset.period").browse(date_period_ids):
@@ -262,6 +260,15 @@ class FixedAsset(Model):
                         'track_id': asset.track_id.id,
                         'track2_id': asset.track2_id.id,
                     })
+
+    def onchange_date(self, context={}):
+        data = context["data"]
+        ctx = {
+            "date": data["date_purchase"],
+        }
+        number = self._get_number(context=ctx)
+        data["number"] = number
+        return data
 
 
 FixedAsset.register()

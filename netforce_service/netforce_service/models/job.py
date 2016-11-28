@@ -50,7 +50,7 @@ class Job(Model):
         "overdue": fields.Boolean("Overdue", function="get_overdue", function_search="search_overdue"),
         "comments": fields.One2Many("message", "related_id", "Comments"),
         "documents": fields.One2Many("document", "related_id", "Documents"),
-        "tasks": fields.One2Many("task", "job_id", "Tasks"),
+        "tasks": fields.One2Many("task", "related_id", "Tasks"),
         "days_late": fields.Integer("Days Late", function="get_days_late"),
         "user_id": fields.Many2One("base.user", "Assigned To"),  # XXX: deprecated
         "resource_id": fields.Many2One("service.resource", "Assigned Resource", search=True),  # XXX: deprecated
@@ -80,7 +80,7 @@ class Job(Model):
         "time_start": fields.DateTime("Planned Start Time"),
         "time_stop": fields.DateTime("Planned Stop Time"),
         "location_id": fields.Many2One("stock.location", "Job Location"),
-        "related_id": fields.Reference([["sale.order", "Sales Order"], ["rental.order","Rental Order"], ["issue", "Issue"]], "Related To"),
+        "related_id": fields.Reference([["sale.order", "Sales Order"], ["issue", "Issue"]], "Related To"),
         "lines": fields.One2Many("job.line", "job_id", "Worksheet"),
         "complaints": fields.Text("Complaints"),
         "cause": fields.Text("Cause"),
@@ -94,10 +94,11 @@ class Job(Model):
         "labor_cost": fields.Decimal("Labor Cost", function="get_cost", function_multi=True),
         "part_cost": fields.Decimal("Parts Cost", function="get_cost", function_multi=True),
         "other_cost": fields.Decimal("Other Cost", function="get_cost", function_multi=True),
-        "total_cost": fields.Decimal("Total Cost", function="get_cost", function_multi=True),
+        "total_cost": fields.Decimal("Total Cost", function="get_cost", function_multi=True, store=True),
         "labor_sell": fields.Decimal("Labor Selling", function="get_sell", function_multi=True),
         "part_sell": fields.Decimal("Parts Selling", function="get_sell", function_multi=True),
         "other_sell": fields.Decimal("Other Selling", function="get_sell", function_multi=True),
+        "total_sell": fields.Decimal("Total Selling", function="get_sell", function_multi=True, store=True),
         "done_approved_by_id": fields.Many2One("base.user", "Approved By", readonly=True),
         "multi_visit_code_id": fields.Many2One("reason.code", "Multi Visit Reason Code", condition=[["type", "=", "service_multi_visit"]]),
         "late_response_code_id": fields.Many2One("reason.code", "Late Response Reason Code", condition=[["type", "=", "service_late_response"]]),
@@ -109,6 +110,8 @@ class Job(Model):
         "track_id": fields.Many2One("account.track.categ","Tracking Code"),
         "track_entries": fields.One2Many("account.track.entry",None,"Tracking Entries",function="get_track_entries",function_write="write_track_entries"),
         "track_balance": fields.Decimal("Tracking Balance",function="_get_related",function_context={"path":"track_id.balance"}),
+        "agg_total_cost": fields.Decimal("Total Cost", agg_function=["sum", "total_cost"]),
+        "agg_total_sell": fields.Decimal("Total Selling", agg_function=["sum", "total_sell"]),
     }
     _order = "number"
     _sql_constraints = [
@@ -145,6 +148,19 @@ class Job(Model):
         "date_open": lambda *a: time.strftime("%Y-%m-%d"),
     }
 
+    def create(self, vals, **kw):
+        if 'project_id' not in vals.keys():
+            project_id=get_model("project").create({
+                'contact_id': vals['contact_id'],
+                'name': vals['number'],
+                'number': vals['number'],
+            })
+            vals['project_id']=project_id
+        new_id = super().create(vals, **kw)
+        self.create_track([new_id])
+        self.function_store([new_id])
+        return new_id
+
     def write(self, ids, vals, **kw):
         if vals.get("state") == "done":
             vals["date_close"] = time.strftime("%Y-%m-%d")
@@ -152,6 +168,7 @@ class Job(Model):
                 if not obj.done_approved_by_id:
                     raise Exception("Service order has to be approved first")
         super().write(ids, vals, **kw)
+        self.function_store(ids)
 
     def get_total(self, ids, context={}):
         vals = {}
@@ -225,12 +242,16 @@ class Job(Model):
             prod = line.product_id
             if prod.type not in ("stock", "consumable"):
                 continue
+            prod_loc_id=None
+            if prod.locations:
+                prod_loc_id=prod.locations[0].location_id
             line_vals = {
                 "product_id": prod.id,
                 "qty": line.qty,
                 "uom_id": line.uom_id.id,
-                "location_from_id": prod.location_id.id or wh_loc_id,
+                "location_from_id": prod_loc_id and prod_loc_id.id or wh_loc_id,
                 "location_to_id": obj.location_id.id or cust_loc_id,
+                "track_id": obj.track_id and obj.track_id.id or None,
             }
             vals["lines"].append(("create", line_vals))
         if not vals["lines"]:
@@ -268,6 +289,7 @@ class Job(Model):
                 "unit_price": line.unit_price,
                 "account_id": prod.sale_account_id.id if prod else None,
                 "tax_id": prod.sale_tax_id.id if prod else None,
+                "track_id": obj.track_id.id if obj.track_id else None,
                 "amount": line.amount,
             }
             inv_vals["lines"].append(("create", line_vals))
@@ -317,7 +339,7 @@ class Job(Model):
         for obj in self.browse(ids):
             labor_cost = 0
             for time in obj.work_time:
-                labor_cost += time.amount or 0
+                labor_cost += time.cost or time.cost_amount or 0
             other_cost = 0
             for line in obj.lines:
                 if line.type != "other":
@@ -332,7 +354,7 @@ class Job(Model):
             part_cost = 0
             for pick in obj.pickings:
                 for move in pick.lines:
-                    amt = move.qty * (move.unit_price or 0)
+                    amt = move.qty * (move.unit_price or move.cost_price or 0)
                     if move.location_to_id.id == job_loc_id and move.location_from_id.id != job_loc_id:
                         part_cost += amt
                     elif move.location_from_id.id == job_loc_id and move.location_to_id.id != job_loc_id:
@@ -362,6 +384,7 @@ class Job(Model):
                 "labor_sell": labor_sell,
                 "part_sell": part_sell,
                 "other_sell": other_sell,
+                "total_sell": labor_sell + part_sell + other_sell,
             }
         return vals
 

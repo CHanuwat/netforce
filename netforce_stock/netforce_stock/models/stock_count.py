@@ -44,6 +44,12 @@ class StockCount(Model):
         "journal_id": fields.Many2One("stock.journal", "Journal"),
         "total_cost_amount": fields.Decimal("Total New Cost Amount",function="get_total_cost_amount"),
     }
+    _order="date desc"
+
+    def _get_journal(self, context={}):
+        settings=get_model("settings").browse(1)
+        if settings.stock_count_journal_id:
+            return settings.stock_count_journal_id.id
 
     def _get_number(self, context={}):
         while 1:
@@ -60,6 +66,7 @@ class StockCount(Model):
         "date": lambda *a: time.strftime("%Y-%m-%d"),
         "number": _get_number,
         "company_id": lambda *a: get_active_company(),
+        'journal_id': _get_journal,
     }
 
     def delete_lines(self, ids, context={}):
@@ -95,7 +102,7 @@ class StockCount(Model):
             "flash": "Stock count lines updated",
         }
 
-    def add_lines(self, ids, context={}):
+    def add_lines(self, ids, context={}): # FIXME: prev_qty
         print("stock_count.add_lines")
         obj = self.browse(ids)[0]
         loc_id = obj.location_id.id
@@ -154,18 +161,47 @@ class StockCount(Model):
             return {}
         prod = get_model("product").browse(prod_id)
         lot_id = line.get("lot_id")
-        qty = get_model("stock.balance").get_qty_phys(loc_id, prod_id, lot_id)
-        unit_price = get_model("stock.balance").get_unit_price(loc_id, prod_id)
+        key=(prod.id,lot_id,loc_id,None)
+        ctx={"date_to":data["date"]}
+        bals=get_model("stock.balance").compute_key_balances([key],context=ctx)[key]
+        qty=bals[0]
+        amt=bals[1]
+        unit_price=amt/qty if qty else 0
         line["bin_location"] = prod.bin_location
         line["prev_qty"] = qty
+        line["prev_cost_amount"] = amt
         line["prev_cost_price"] = unit_price
         line["new_qty"] = qty
         line["unit_price"] = unit_price
         line["uom_id"] = prod.uom_id.id
         return data
 
+    def update_prev_qtys(self,ids,context={}):
+        print("StockCount.update_prev_qtys")
+        t0=time.time()
+        obj=self.browse(ids[0])
+        keys=[]
+        for line in obj.lines:
+            key=(line.product_id.id,line.lot_id.id,obj.location_id.id,None)
+            keys.append(key)
+        ctx={"date_to":obj.date}
+        all_bals=get_model("stock.balance").compute_key_balances(keys,context=ctx)
+        for line in obj.lines:
+            key=(line.product_id.id,line.lot_id.id,obj.location_id.id,None)
+            bals=all_bals[key]
+            qty=bals[0]
+            amt=bals[1]
+            line.write({
+                "prev_qty": qty,
+                "prev_cost_amount": amt,
+            })
+        t1=time.time()
+        print("<< StockCount.update_prev_qtys finished in %.2f s"%(t1-t0))
+
     def validate(self, ids, context={}):
-        obj = self.browse(ids)[0]
+        print("StockCount.validate",ids)
+        self.update_prev_qtys(ids,context=context)
+        obj = self.browse(ids[0])
         settings = get_model("settings").browse(1)
         res = get_model("stock.location").search([["type", "=", "inventory"]])
         if not res:
@@ -182,6 +218,7 @@ class StockCount(Model):
         line_no=0
         num_lines=len(obj.lines)
         db=database.get_connection()
+        t0=time.time()
         for line in obj.lines:
             line_no+=1
             print("line %s/%s"%(line_no,num_lines))
@@ -217,10 +254,13 @@ class StockCount(Model):
             }
             #move_id = get_model("stock.move").create(vals)
             number="%s/%s"%(obj.number,line_no)
-            res=db.get("INSERT INTO stock_move (journal_id,date,ref,product_id,lot_id,location_from_id,location_to_id,qty,uom_id,cost_price,cost_amount,related_id,state,number) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'draft',%s) RETURNING id",vals["journal_id"],vals["date"],vals["ref"],vals["product_id"],vals["lot_id"],vals["location_from_id"],vals["location_to_id"],vals["qty"],vals["uom_id"],vals["cost_price"],vals["cost_amount"],vals["related_id"],number)
+            res=db.get("INSERT INTO stock_move (journal_id,date,ref,product_id,lot_id,location_from_id,location_to_id,qty,uom_id,cost_price,cost_amount,related_id,state,number,cost_fixed,company_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'draft',%s,%s,%s) RETURNING id",vals["journal_id"],vals["date"],vals["ref"],vals["product_id"],vals["lot_id"],vals["location_from_id"],vals["location_to_id"],vals["qty"],vals["uom_id"],vals["cost_price"],vals["cost_amount"],vals["related_id"],number,True,obj.company_id.id)
             move_id=res.id
             move_ids.append(move_id)
+        t1=time.time()
+        print("  stock movements created in %.2f s"%(t1-t0))
         get_model("stock.move").set_done(move_ids)
+        print("  stock movements completed")
         obj.write({"state": "done"})
 
     def void(self, ids, context={}):

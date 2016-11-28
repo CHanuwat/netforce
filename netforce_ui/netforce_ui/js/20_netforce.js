@@ -20,6 +20,8 @@
  * OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+NF_TIMEOUT=1; // seconds
+
 window.log=function() {
     if (this.console) {
         console.log(Array.prototype.slice.call(arguments));
@@ -72,7 +74,7 @@ function rpc_execute(model,method,args,opts,cb) {
             params: params
         }),
         dataType: "json",
-        contentType: "application/x-www-form-urlencoded; charset=UTF-8",
+        contentType: "application/json;charset=UTF-8",
         success: function(data) {
             if (data.error) {
                 log("RPC ERROR",model,method,data.error.message);
@@ -434,13 +436,14 @@ Handlebars.registerHelper("loop",function(options) {
 
 Handlebars.registerHelper("field_label",function(name,options) {
     var ctx=options.hash.context;
+    var string=options.hash.string;
     if (ctx.model) {
         model_name=ctx.model.name;
     } else if (ctx.collection) {
         model_name=ctx.collection.name;
     }
     var field=get_field(model_name,name);
-    return translate(field.string);
+    return translate(string || field.string);
 });
 
 function format_date(val,options) {
@@ -471,6 +474,22 @@ function parse_date(val) {
         var fmt="YYYY-MM-DD";
     }
     var val2=moment(val,fmt).format("YYYY-MM-DD");
+    if (ui_params_db && ui_params_db.use_buddhist_date) {
+        var year=parseInt(val2.substr(0,4));
+        var year2=year-543;
+        val2=""+year2+val2.substr(4);
+    }
+    return val2;
+}
+
+function parse_datetime(val) {
+    if (!val) return null;
+    if (ui_params_db.date_format) {
+        var fmt=ui_params_db.date_format;
+    } else {
+        var fmt="YYYY-MM-DD HH:mm:ss";
+    }
+    var val2=moment(val,fmt).format("YYYY-MM-DD HH:mm:ss");
     if (ui_params_db && ui_params_db.use_buddhist_date) {
         var year=parseInt(val2.substr(0,4));
         var year2=year-543;
@@ -584,6 +603,8 @@ function field_value(name,context,link,target,m2o_link,click_action,show_image,s
                 var v=field.selection[i];
                 if (v[0]==val) {
                     val=v[1];
+                    val=translate(val);
+                    if(val instanceof Handlebars.SafeString) val=val.toString();
                     break;
                 }
             }
@@ -1062,6 +1083,9 @@ function exec_action_ready(action) {
         var res=confirm(action_opts.confirm);
         if (!res) return;
     }
+
+    ui_log(action.name);
+
     if (action_opts.context) {
         if (_.isString(action_opts.context)) {
             var ctx=_.extend({},global_ctx,action);
@@ -1371,6 +1395,7 @@ function get_model_cls(name) { // XXX
 }
 
 function get_field(model_name,field_name) {
+    if (field_name=='id') return {};
     var models=nf_models;
     var model=models[model_name];
     if (!model) throw "Model not found: "+model_name;
@@ -1484,6 +1509,8 @@ window.NFModel=Backbone.Model.extend({
                 if (_.isArray(v)) v=v[0];
             } else if (f.type=="one2many") {
                 if (!v) continue;
+                /*if (_.isArray(v) && v.length < 1) continue;*/
+                if (!(v instanceof NFCollection)) continue;
                 v=v.get_vals();
             }
             vals[n]=v;
@@ -1531,6 +1558,7 @@ window.NFModel=Backbone.Model.extend({
         for (var n in vals) {
             var v=vals[n];
             var f=this.get_field(n);
+            if (_.isEmpty(f)) continue;
             if (f.type=="many2one") {
                 if (_.isNumber(v)) {
                     var old_v=this.get(n);
@@ -1657,9 +1685,15 @@ window.NFModel=Backbone.Model.extend({
             var required=this.required_fields[n];
             var v=this.get(n);
             //log("n",n,"req",required,"v",v);
-            if (required && !v && v!=0) {
-                errors[n]="Missing value";
-                ok=false;
+            if (required){
+                var t=typeof(v);
+                if(t!='number' && _.isEmpty(v)){
+                    errors[n]="Missing value";
+                    ok=false;
+                }else if(t=='number' && v==null){
+                    errors[n]="Missing value";
+                    ok=false;
+                }
             }
             if (f.type=="one2many") {
                 if (v instanceof NFCollection) {
@@ -1769,6 +1803,8 @@ window.NFCollection=Backbone.Collection.extend({
 
     set_vals: function(vals) { // XXX: what if different length?
         log("collection set_vals",vals);
+        var LenV = vals.length;
+        var LenM = this.models.length;
         for (var i=0; i<vals.length; i++) {
             var v=vals[i];
             var m=this.models[i];
@@ -1777,6 +1813,16 @@ window.NFCollection=Backbone.Collection.extend({
                 this.add(m);
             }
             m.set_vals(v);
+        }
+
+        /*onchange one2many */
+        if(LenM > LenV){
+            for(var n = LenV; n < LenM; n++){
+                var m = this.models[n];
+                this.remove(m);
+                var p = this.models[LenV]; /*must do each loop*/
+                this.remove(p);
+            }
         }
     },
 
@@ -2148,6 +2194,15 @@ function check_package(pkg) {
     return res;
 }
 
+function allow_import_export(ctx) {
+    if(!ctx) return true;
+    var user_id=ctx.user_id;
+    if (user_id==1) return true;
+    if (ctx.prevent_import_export) return false; //XXX cookies
+    if (check_other_permission("prevent_import_export")) return false;
+    return true;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 /// SYNC ///////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2490,4 +2545,20 @@ $(function() {
 function nf_get_version() {
     if (!ui_params) return null;
     return ui_params.version;
+}
+
+function ui_log(action_name) {
+    if (!action_name) return;
+    var cookies=get_cookies();
+    var keep_ui_log=cookies.keep_ui_log;
+    if (!keep_ui_log) return;
+    var action=get_action(action_name);
+    if (action.name=='ui_log') return;
+    if (nf_models && !nf_models["ui.log"]) return;
+
+    var args=[action.name, action.model, action.string || action.name];
+    log("ui.log ", args);
+    rpc_execute("ui.log","log",args,{},function(err,data) {
+        if(err) alert("ERROR "+err.message);
+    });
 }

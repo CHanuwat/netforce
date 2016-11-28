@@ -91,14 +91,14 @@ class PurchaseOrder(Model):
         if not seq_id:
             return None
         while 1:
-            num = get_model("sequence").get_next_number(seq_id)
+            num = get_model("sequence").get_next_number(seq_id,context=context)
             user_id = get_active_user()
             set_active_user(1)
             res = self.search([["number", "=", num]])
             set_active_user(user_id)
             if not res:
                 return num
-            get_model("sequence").increment_number(seq_id)
+            get_model("sequence").increment_number(seq_id,context=context)
 
     def _get_currency(self, context={}):
         settings = get_model("settings").browse(1)
@@ -200,6 +200,9 @@ class PurchaseOrder(Model):
             if not line:
                 continue
             amt = Decimal(((line.get("qty") or 0) * (line.get("unit_price") or 0)) - (line.get("discount_amount") or 0))
+            if line.get("discount_percent"):
+                disc = amt * line["discount_percent"] / Decimal(100)
+                amt -= disc
             line["amount"] = amt
             new_cur=get_model("currency").convert(amt, int(data.get("currency_id")), settings.currency_id.id)
             line['amount_cur']=new_cur and new_cur or None
@@ -246,6 +249,9 @@ class PurchaseOrder(Model):
             line["tax_id"] = prod.purchase_tax_id.id
         if prod.location_id:
             line["location_id"] = prod.location_id.id
+        elif prod.locations:
+            line["location_id"] = prod.locations[0].location_id.id
+            #TODO
         data = self.update_amounts(context)
         return data
 
@@ -326,7 +332,7 @@ class PurchaseOrder(Model):
                 cost_price_cur/=prod.purchase_to_stock_uom_factor
             else:
                 purch_uom=line.uom_id
-            cost_price=get_model("currency").convert(cost_price_cur,obj.currency_id.id,settings.currency_id.id)
+            cost_price=get_model("currency").convert(cost_price_cur,obj.currency_id.id,settings.currency_id.id,date=pick_vals.get("date"))
             cost_amount=cost_price*remain_qty
             line_vals = {
                 "product_id": prod.id,
@@ -344,6 +350,7 @@ class PurchaseOrder(Model):
             raise Exception("Nothing left to receive")
         pick_id = get_model("stock.picking").create(pick_vals, {"pick_type": "in"})
         pick = get_model("stock.picking").browse(pick_id)
+        pick.set_currency_rate()
         return {
             "next": {
                 "name": "pick_in",
@@ -377,13 +384,29 @@ class PurchaseOrder(Model):
             remain_qty = line.qty - line.qty_invoiced
             if remain_qty <= 0:
                 continue
+            # get account for purchase invoice
+            purch_acc_id=None
+            if prod:
+                # 1. get from product
+                purch_acc_id=prod.purchase_account_id and prod.purchase_account_id.id or None
+                # 2. if not get from master / parent product
+                if not purch_acc_id and prod.parent_id:
+                    purch_acc_id=prod.parent_id.purchase_account_id.id
+                # 3. if not get from product category
+                categ=prod.categ_id
+                if categ and not purch_acc_id:
+                    purch_acc_id= categ.purchase_account_id and categ.purchase_account_id.id or None
+
+            #if not purch_acc_id:
+                #raise Exception("Missing purchase account configure for product [%s]" % prod.name)
+
             line_vals = {
                 "product_id": prod.id,
                 "description": line.description,
                 "qty": remain_qty,
                 "uom_id": line.uom_id.id,
                 "unit_price": line.unit_price,
-                "account_id": prod and prod.purchase_account_id.id or None,
+                "account_id": purch_acc_id,
                 "tax_id": line.tax_id.id,
                 "amount": line.amount,
             }
@@ -529,6 +552,7 @@ class PurchaseOrder(Model):
 
     def onchange_sequence(self, context={}):
         data = context["data"]
+        context['date'] = data['date']
         seq_id = data["sequence_id"]
         if not seq_id:
             return None
@@ -557,5 +581,55 @@ class PurchaseOrder(Model):
             new_cur=get_model("currency").convert(amt, int(data.get("currency_id")), settings.currency_id.id)
             line['amount_cur']=new_cur and new_cur or None
         return data
+
+    def view_purchase(self, ids, context={}):
+        obj=get_model("purchase.order.line").browse(ids)[0]
+        return {
+            'next': {
+                'name': 'purchase',
+                'active_id': obj.order_id.id,
+                'mode': 'form',
+            },
+        }
+
+    def copy_to_purchase_return(self,ids,context={}):
+        seq_id = get_model("sequence").find_sequence(type="purchase_return")
+        if not seq_id:
+            raise Exception("Missing Sequence purchase return")
+        for obj in self.browse(ids):
+            order_vals = {}
+            order_vals = {
+                "contact_id":obj.contact_id.id,
+                "date":obj.date,
+                "ref":obj.number,
+                "currency_id":obj.currency_id.id,
+                "tax_type":obj.tax_type,
+                "bill_address_id":obj.bill_address_id.id,
+                "ship_address_id":obj.ship_address_id.id,
+                "price_list_id": obj.price_list_id.id,
+                "lines":[],
+            }
+            for line in obj.lines:
+                line_vals = {
+                    "product_id":line.product_id.id,
+                    "description":line.description,
+                    "qty":line.qty,
+                    "uom_id":line.uom_id.id,
+                    "unit_price":line.unit_price,
+                    "tax_id":line.tax_id.id,
+                    "amount":line.amount,
+                    "location_id":line.location_id.id,
+                }
+                order_vals["lines"].append(("create", line_vals))
+            purchase_id = get_model("purchase.return").create(order_vals)
+            purchase = get_model("purchase.return").browse(purchase_id)
+        return {
+            "next": {
+                "name": "purchase_return",
+                "mode": "form",
+                "active_id": purchase_id,
+            },
+            "flash": "Purchase Return %s created from purchases order %s" % (purchase.number, obj.number),
+        }
 
 PurchaseOrder.register()

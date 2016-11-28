@@ -22,7 +22,6 @@ from netforce.model import Model, fields, get_model
 from netforce.database import get_connection
 from datetime import *
 from dateutil.relativedelta import *
-from pprint import pprint
 from netforce.access import get_active_company
 
 
@@ -57,6 +56,7 @@ class ReportAccountSale(Model):
             "company_name": comp.name,
             "date_from": date_from,
             "date_to": date_to,
+            'grand_total': 0,
         }
         cond = [["account_id.type", "in", ["revenue", "other_income"]],
                ["move_id.date", ">=", date_from], ["move_id.date", "<=", date_to]]
@@ -89,8 +89,9 @@ class ReportAccountSale(Model):
             group["lines"].append(line_vals)
         data["groups"] = sorted(groups.values(), key=lambda g: g["contact_name"] or "")
         for group in data["groups"]:
-            group["total"] = sum([l["amount"] for l in group["lines"]])
-        pprint(data)
+            total=sum([l["amount"] for l in group["lines"]]) or 0
+            group["total"]=total
+            data['grand_total']+=total
         return data
 
 ReportAccountSale.register()

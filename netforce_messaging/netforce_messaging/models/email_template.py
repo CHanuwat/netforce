@@ -21,7 +21,7 @@
 from netforce.model import Model, fields, get_model
 from netforce.template import render_template
 import time
-
+from pprint import pprint
 
 class Template(Model):
     _name = "email.template"
@@ -43,6 +43,7 @@ class Template(Model):
 
     def create_email(self, ids, data={}, name_id=None, related_id=None, mailbox_id=None, context={}):
         obj = self.browse(ids)[0]
+        cc_addrs = None
         try:
             from_addr = render_template(obj.from_addr or "", data)
         except:
@@ -51,6 +52,7 @@ class Template(Model):
             to_addrs = render_template(obj.to_addrs or "", data)
         except:
             raise Exception("Failed to render 'To Addresses' in template: %s" % obj.name)
+        to_addrs=",".join([x for x in to_addrs.split(",") if x.strip()]) # get rid of empty string or email
         if obj.cc_addrs:
             try:
                 cc_addrs = render_template(obj.cc_addrs or "", data)
@@ -94,9 +96,11 @@ class Template(Model):
             "attachments": attachments,
             "name_id": name_id,
             "related_id": related_id,
+            "cc_addrs" : cc_addrs,
         }
         if mailbox_id:
             vals["mailbox_id"] = mailbox_id
+        pprint(vals)
         email_id = get_model("email.message").create(vals)
         return email_id
 

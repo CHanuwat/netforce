@@ -50,6 +50,11 @@ var FieldChar=NFView.extend({
         this.data.value=model.get(name);
         var field=model.get_field(name);
         this.data.string=field.string;
+        this.data.placeholder=this.options.placeholder;
+        this.data.size=this.options.size || field.size;
+        if (this.options.string) {
+            this.data.string=this.options.string;
+        }
         this.data.readonly=field.readonly||this.options.readonly||this.context.readonly;
         var attrs=this.eval_attrs();
         if (attrs.readonly!==undefined) {
@@ -60,6 +65,7 @@ var FieldChar=NFView.extend({
             this.data.readonly=true;
         }
         if (this.options.password) this.data.input_type="password";
+        else if (field.password) this.data.input_type="password";
         else if (this.options.email && Modernizr.inputtypes.email) this.data.input_type="email";
         else this.data.input_type="text";
         var form_layout=this.options.form_layout||"stacked";
@@ -246,7 +252,11 @@ var FieldChar=NFView.extend({
         };
         var view=view_cls.make_view(opts);
         log("view",view,view.el);
-        $("body").append(view.el);
+        if($(".modal").hasClass("in")){
+            $(".modal").append(view.el);
+        }else{
+            $("body").append(view.el);
+        }
         view.render();
     }
 });

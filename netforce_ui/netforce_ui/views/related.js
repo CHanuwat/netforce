@@ -112,6 +112,12 @@ var Related=NFView.extend({
                 if (that.collection.length==0) {
                     that.$el.find(".btn-delete").hide();
                 }
+                if(that.options.noadd){
+                    that.$el.find(".nf-btn-add").hide();
+                }
+                if(that.options.nodelete){
+                    that.$el.find(".nf-btn-delete").hide();
+                }
             });
         } else if (field.type=="many2many") { // XXX
             rpc_execute(model.name,"read",[[model.id],[this.field_name]],{},function(err,data) {
@@ -215,6 +221,7 @@ var Related=NFView.extend({
                 relfield: this.relfield,
                 parent_id: this.context.model.id,
                 parent_model: this.model_name,
+                parent_data: this.context.model.get_vals(),
                 context: this.data.context
             };
             var view_cls=get_view_cls("inline_form");

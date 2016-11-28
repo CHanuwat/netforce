@@ -50,6 +50,7 @@ var Sheet=NFView.extend({
                         name: $el.attr("name"),
                         onchange: $el.attr("onchange"),
                         onfocus: $el.attr("onfocus"),
+                        focus: $el.attr("focus"),
                         string: $el.attr("string"),
                         condition: $el.attr("condition")||$el.attr("condition"), // XXX
                         readonly: $el.attr("readonly"),
@@ -68,6 +69,7 @@ var Sheet=NFView.extend({
         var collection=this.context.collection;
         log("sheet collection",collection);
         var model_name=collection.name;
+
         if (collection.length==0 && this.options.default_count) {
             var ctx=clean_context(this.context);
             rpc_execute(model_name,"default_get",[this.field_names],{context:ctx},function(err,data) {
@@ -83,35 +85,60 @@ var Sheet=NFView.extend({
     },
 
     render: function() {
-        //log("sheet render",this);
+        log("sheet.render",this);
+        var that=this;
         this.data.sheet_view=this;
         this.data.show_add=!this.context.readonly && !this.options.readonly && !this.context.noadd && !this.options.noadd;
         this.data.readonly=this.options.readonly;
         var model_name=this.context.collection.name;
+        that.required_fields={};
         _.each(this.data.fields,function(field) {
             var name=field.name;
             var f=get_field(model_name,name);
             if (f.type=="float") {
                 field.align="right";
             }
+            if (f.required || field.required){
+                that.required_fields[name]=true;
+            }
             var perms=get_field_permissions(model_name,name);
             if (!perms.perm_read) {
                 field.invisible=true;
+            }
+        });
+        that.context.collection.each(function(model){
+            for (field in that.required_fields){
+                model.set_required(field);
             }
         });
         NFView.prototype.render.call(this);
     },
 
     add_line: function(e) {
-        e.preventDefault();
-        e.stopPropagation();
+        if(e){
+            e.preventDefault();
+            e.stopPropagation();
+        }
         var collection=this.context.collection;
+        var that=this;
         var model_name=collection.name;
         var ctx=clean_context(this.context);
         ctx.data=collection.parent_model.get_vals(); // XXX
         rpc_execute(model_name,"default_get",[this.field_names],{context:ctx},function(err,data) {
             var model=new NFModel(data,{name:model_name});
             collection.add(model);
+            //========== focus field
+            if(that.data.fields){
+                var focus_field=that.data.fields[0].name; // set default to first column
+                _.each(that.data.fields,function(field){
+                    if(field.focus){focus_field=field.name;}
+                });
+                if (focus_field){
+                    var cells=that.$el.find("td[data-field="+focus_field+"]").last();
+                    var cell=cells[0];
+                    that.focus_cell(cell);
+                }
+            }
         });
     },
 

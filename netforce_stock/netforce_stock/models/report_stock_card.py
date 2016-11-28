@@ -23,7 +23,6 @@ from datetime import *
 from dateutil.relativedelta import *
 from netforce.access import get_active_company
 from netforce.database import get_connection
-from pprint import pprint
 import time
 
 
@@ -45,11 +44,13 @@ def get_totals(date_from, date_to, product_id=None, location_id=None, show_pendi
         q += " AND m.product_id=%s"
         q_args.append(product_id)
     if location_id:
-        q += " AND (m.location_from_id=%s OR m.location_to_id=%s)"
-        q_args+=[location_id,location_id]
+        loc_ids = get_model("stock.location").search([["id","child_of",location_id]])
+        q += " AND (m.location_from_id in %s OR m.location_to_id in %s)"
+        q_args += [tuple(loc_ids), tuple(loc_ids)]
     if categ_id:
-        q += " AND p.categ_id=%s"
-        q_args.append(categ_id)
+        categ_ids = get_model("product.categ").search([["id","child_of",categ_id]])
+        q += " AND p.categ_id in %s"
+        q_args.append(tuple(categ_ids))
     if lot_id:
         q += " AND m.lot_id=%s"
         q_args.append(lot_id)
@@ -157,17 +158,19 @@ class ReportStockCard(Model):
         prod_locs = {}
 
         db = get_connection()
-        q = "SELECT m.id,m.date,m.ref,m.related_id,m.lot_id,l.number AS lot_num,m.invoice_id,i.number AS invoice_num,m.product_id,m.location_from_id,m.location_to_id,m.qty,m.uom_id,m.cost_amount,m.qty2 FROM stock_move m LEFT JOIN stock_lot l ON l.id=m.lot_id LEFT JOIN account_invoice i ON i.id=m.invoice_id LEFT JOIN product p on m.product_id=p.id WHERE m.date>=%s AND m.date<=%s"
+        q = "SELECT m.id,m.date,m.ref,m.related_id,m.lot_id,l.number AS lot_num,m.invoice_id,i.tax_no AS tax_no,i.number AS invoice_num,m.product_id,m.location_from_id,m.location_to_id,m.qty,m.uom_id,m.cost_amount,m.qty2 FROM stock_move m LEFT JOIN stock_lot l ON l.id=m.lot_id LEFT JOIN account_invoice i ON i.id=m.invoice_id LEFT JOIN product p on m.product_id=p.id WHERE m.date>=%s AND m.date<=%s"
         args = [date_from + " 00:00:00", date_to + " 23:59:59"]
         if product_id:
             q += " AND m.product_id=%s"
             args.append(product_id)
         if categ_id:
-            q += " AND p.categ_id=%s"
-            args.append(categ_id)
+            categ_ids = get_model("product.categ").search([["id","child_of",categ_id]])
+            q += " AND p.categ_id in %s"
+            args.append(tuple(categ_ids))
         if location_id:
-            q += " AND (m.location_from_id=%s OR m.location_to_id=%s)"
-            args += [location_id, location_id]
+            loc_ids = get_model("stock.location").search([["id","child_of",location_id]])
+            q += " AND (m.location_from_id in %s OR m.location_to_id in %s)"
+            args += [tuple(loc_ids), tuple(loc_ids)]
         if lot_id:
             q += " AND m.lot_id=%s"
             args.append(lot_id)
@@ -218,6 +221,7 @@ class ReportStockCard(Model):
         groups = []
         i=0
         for (prod_id, loc_id), moves in prod_locs.items():
+            loc_ids=get_model("stock.location").search([['id','parent_of',loc_id]])
             i+=1
             if i%100==0:
                 print("%d/%d"%(i,len(prod_locs)))
@@ -226,7 +230,7 @@ class ReportStockCard(Model):
             prod = prods[prod_id]
             loc = locs[loc_id]
             if location_id:
-                if loc_id != location_id:
+                if location_id not in loc_ids:
                     continue
             else:
                 if loc["type"] != "internal":
@@ -259,6 +263,8 @@ class ReportStockCard(Model):
                     "invoice_id": r.invoice_id,
                     "invoice_num": r.invoice_num,
                 }
+                if r.tax_no:
+                    line['invoice_num']+=" ["+r.tax_no+"]"
                 if r.location_to_id == loc_id and r.location_from_id == loc_id:
                     continue
                 elif r.location_to_id == loc_id:
@@ -318,7 +324,6 @@ class ReportStockCard(Model):
             "groups": groups,
             "show_qty2": params.get("show_qty2"),
         }
-        #pprint(data)
         return data
 
 ReportStockCard.register()

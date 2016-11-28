@@ -67,6 +67,7 @@ class Model(object):
     _inherit = None
     _defaults = {}
     _order = None
+    _order_expression = None
     _key = None
     _name_field = None
     _code_field = None
@@ -93,6 +94,10 @@ class Model(object):
             model_cls._fields.update(cls._fields or {})
             model_cls._defaults = parent_cls._defaults.copy()
             model_cls._defaults.update(cls._defaults)
+            if cls._order:
+                model_cls._order=cls._order
+            if cls._order_expression:
+                model_cls._order_expression=cls._order_expression
         else:
             if not cls._name:
                 raise Exception("Missing model name in %s" % cls)
@@ -167,7 +172,7 @@ class Model(object):
 
     def default_get(self, field_names=None, context={}, load_m2o=True):
         vals = {}
-        if field_names is None:
+        if not field_names:
             field_names = self._defaults.keys()
         for n in field_names:
             v = self._defaults.get(n)
@@ -237,7 +242,17 @@ class Model(object):
             if len(ids) > 1:
                 raise Exception("Duplicate keys: model=%s, %s" % (self._name, ", ".join(["%s='%s'"%(k,r[k]) for k in self._key])))
 
+    def check_permission_company(self,context={}):
+        """
+            System should not allow to create any transaction on a Group Company except reports
+            (since some reports will also create a record when click run report).
+        """
+        except_models=['company','log','field.default']
+        if not access.allow_create_transaction() and not self._transient and self._name not in except_models:
+            raise Exception("This company not allow to create transaction!")
+
     def create(self, vals, context={}):
+        self.check_permission_company()
         if not access.check_permission(self._name, "create"):
             raise Exception("Permission denied (create %s, user_id=%s)" % (self._name, access.get_active_user()))
         vals = self._add_missing_defaults(vals, context=context)
@@ -245,7 +260,10 @@ class Model(object):
             f = self._fields[n]
             if isinstance(f, fields.Char):
                 if f.password and v:
-                    vals[n] = utils.encrypt_password(v)
+                    if f.encrypt:
+                        vals[n] = utils.encrypt_password(v)
+                    else:
+                        vals[n] = v
             elif isinstance(f, fields.Json):
                 if not isinstance(v, str):
                     vals[n] = utils.json_dumps(v)
@@ -282,11 +300,17 @@ class Model(object):
                     f = self._fields[n]
                     if isinstance(f, fields.Many2One):
                         val = str(val)
-                    elif isinstance(f, fields.Float):
+                    elif isinstance(f, (fields.Float,fields.Decimal)):
                         val = str(val)
                     elif isinstance(f, fields.Char):
                         pass
                     elif isinstance(f, fields.File):
+                        pass
+                    elif isinstance(f, fields.Text):
+                        pass
+                    elif isinstance(f, fields.Boolean):
+                        pass
+                    elif isinstance(f, fields.Date):
                         pass
                     else:
                         raise Exception("Multicompany field not yet implemented: %s" % n)
@@ -443,6 +467,9 @@ class Model(object):
                                     cond_list.append("false")
                                 elif op == "not in":
                                     cond_list.append("true")
+                        elif op in ("not like", "not ilike"):
+                            cond_list.append("%s %s %%s" % (col, op))
+                            args.append("%" + val + "%")
                         elif op in ("like", "ilike"):
                             cond_list.append("%s %s %%s" % (col, op))
                             args.append("%" + val + "%")
@@ -607,16 +634,19 @@ class Model(object):
         joins, cond, w_args = self._where_calc(cond, context=context)
         args=w_args[:]
         ord_joins, ord_clauses = self._order_calc(order or self._order or "id")
-        # print("CONDITION:",cond)
         q = "SELECT tbl0.id FROM " + self._table + " tbl0"
         if joins:
             q += " " + " ".join(joins)
-        if ord_joins:
-            q += " " + " ".join(ord_joins)
+        if not self._order_expression:
+            if ord_joins:
+                q += " " + " ".join(ord_joins)
         if cond:
             q += " WHERE (" + cond + ")"
-        if ord_clauses:
-            q += " ORDER BY " + ",".join(ord_clauses)
+        if not self._order_expression:
+            if ord_clauses:
+                q += " ORDER BY " + ",".join(ord_clauses)
+        else:
+            q += "ORDER BY "+self._order_expression
         if offset is not None:
             q += " OFFSET %s"
             args.append(offset)
@@ -639,6 +669,7 @@ class Model(object):
 
     def write(self, ids, vals, check_time=False, context={}):
         #print(">>> WRITE",self._name,ids,vals)
+        self.check_permission_company()
         if not access.check_permission(self._name, "write", ids):
             raise Exception("Permission denied (write %s)" % self._name)
         if not ids or not vals:
@@ -654,7 +685,10 @@ class Model(object):
                     vals[n] = utils.json_dumps(v)  # XXX
             elif isinstance(f, fields.Char):
                 if f.password and v:
-                    vals[n] = utils.encrypt_password(v)
+                    if f.encrypt:
+                        vals[n] = utils.encrypt_password(v)
+                    else:
+                        vals[n] = v
         db = database.get_connection()
         if check_time:
             q = "SELECT MAX(write_time) AS write_time FROM " + self._table + \
@@ -705,6 +739,7 @@ class Model(object):
                            company_id, self._name, tuple(multico_fields), tuple(ids))
             val_ids = {}
             rec_ids = {}
+            user_id = access.get_active_user()
             for r in res:
                 val_ids.setdefault(r.field, []).append(r.id)
                 rec_ids.setdefault(r.field, []).append(r.record_id)
@@ -714,22 +749,30 @@ class Model(object):
                     f = self._fields[n]
                     if isinstance(f, fields.Many2One):
                         val = str(val)
-                    elif isinstance(f, fields.Float):
+                    elif isinstance(f, (fields.Float, fields.Decimal)):
                         val = str(val)
                     elif isinstance(f, fields.Char):
                         pass
                     elif isinstance(f, fields.File):
                         pass
+                    elif isinstance(f, fields.Text):
+                        pass
+                    elif isinstance(f, fields.Boolean):
+                        pass
+                    elif isinstance(f, fields.Date):
+                        pass
                     else:
                         raise Exception("Multicompany field not yet implemented: %s" % n)
                 ids2 = val_ids.get(n)
                 if ids2:
-                    db.execute("UPDATE field_value SET value=%s WHERE id in %s", val, tuple(ids2))
+                    write_time=time.strftime("%Y-%m-%d %H:%M:%S")
+                    db.execute("UPDATE field_value SET value=%s, write_time=%s, write_uid=%s WHERE id in %s", val, write_time, user_id, tuple(ids2))
                 ids3 = rec_ids.get(n, [])
                 ids4 = list(set(ids) - set(ids3))
                 for rec_id in ids4:
-                    db.execute("INSERT INTO field_value (company_id,model,field,record_id,value) VALUES (%s,%s,%s,%s,%s)",
-                               company_id, self._name, n, rec_id, val)
+                    create_time=time.strftime("%Y-%m-%d %H:%M:%S")
+                    db.execute("INSERT INTO field_value (create_time,create_uid,company_id,model,field,record_id,value) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                               create_time,user_id,company_id, self._name, n, rec_id, val)
         for n in vals:
             f = self._fields[n]
             if f.function_write:
@@ -805,6 +848,7 @@ class Model(object):
         self.trigger(ids, "write")
 
     def delete(self, ids, context={}):
+        self.check_permission_company()
         if not access.check_permission(self._name, "delete", ids):
             raise Exception("Permission denied (delete %s)" % self._name)
         if not ids:
@@ -830,8 +874,12 @@ class Model(object):
             #print("<<< READ",self._name)
             return []
         if not field_names:
-            field_names = [n for n, f in self._fields.items() if not isinstance(
-                f, (fields.One2Many, fields.Many2Many)) and not (not f.store and not f.function)]
+            field_names = []
+            for n, f in self._fields.items():
+                if isinstance(f, (fields.Many2Many)):
+                    field_names.append(n)
+                elif not isinstance(f, (fields.One2Many)) and not (not f.store and not f.function):
+                    field_names.append(n)
         field_names = list(set(field_names))  # XXX
         cols = ["id"] + [n for n in field_names if self.get_field(n).store]
         q = "SELECT " + ",".join(['"%s"' % col for col in cols]) + " FROM " + self._table
@@ -908,12 +956,25 @@ class Model(object):
                         if k not in vals:
                             continue
                         v = vals[k]
-                        if v is not None and v.isnumeric():
-                        #if v is not None:
+                        if v is not None:
                             r[n] = float(v)
+                elif isinstance(f, fields.Decimal):
+                    for r in res:
+                        k = (r["id"], n)
+                        if k not in vals:
+                            continue
+                        v = vals[k]
+                        if v is not None:
+                            r[n] = Decimal(v)
                 elif isinstance(f, fields.Char):
                     pass
                 elif isinstance(f, fields.File):
+                    pass
+                elif isinstance(f, fields.Text):
+                    pass
+                elif isinstance(f, fields.Boolean):
+                    pass
+                elif isinstance(f, fields.Date):
                     pass
                 else:  # TODO: add more field types...
                     raise Exception("Multicompany field not yet implemented: %s" % n)
@@ -1345,6 +1406,15 @@ class Model(object):
                             if n not in todo:
                                 v = obj[n]
                                 todo[n] = [v]
+                    elif isinstance(f, fields.Reference):
+                        v = obj[n]
+                        if v:
+                            mr = get_model(v._model)
+                            exp_field = mr.get_export_field()
+                            v = '%s,%s'%(v._model,v[exp_field])
+                        else:
+                            v = None
+                        row[path] = v
                     elif isinstance(f, fields.Selection):
                         v = obj[n]
                         if v:
@@ -1466,6 +1536,22 @@ class Model(object):
                     elif isinstance(f, fields.Date):
                         dt = dateutil.parser.parse(v)
                         v = dt.strftime("%Y-%m-%d")
+                    elif isinstance(f, fields.Reference):
+                        if v:
+                            try:
+                                model_name,value = v.split(",")
+                                mr = get_model(model_name)
+                                exp_field = mr.get_export_field()
+                                res = mr.search([[exp_field,'=',value]])
+                                if res:
+                                    rid = res[0]
+                                    v = "%s,%s" % (model_name,rid) #XXX
+                                else:
+                                    v = None
+                            except:
+                                v = None
+                        else:
+                            v = None
                     elif isinstance(f, fields.Many2One):
                         mr = get_model(f.relation)
                         ctx = {
@@ -1670,6 +1756,8 @@ class Model(object):
             out={"data":res}
         def _fill_m2o(m, vals):
             for k, v in vals.items():
+                if k=='id':
+                    continue
                 if not v:
                     continue
                 f = m._fields[k]
@@ -2046,7 +2134,7 @@ class Model(object):
                 mtime=obj.write_time
             else:
                 mtime=None
-            res.append((k,m_time))
+            res.append((k,mtime))
         return res
 
     def sync_export(self, ids, context={}):
@@ -2357,6 +2445,7 @@ class BrowseRecord(object):
                 #print("BrowseRecord call %s %s %s"%(m._name,self.id,name))
                 return f([self.id], *a, **kw)
             return call
+        db=database.get_connection()
         model_cache = self.browse_cache.setdefault(self._model, {})
         cache = model_cache.setdefault(self.id, {})
         if not name in cache:
@@ -2401,10 +2490,14 @@ class BrowseRecord(object):
                         val = r[n]
                         if val:
                             r_model, r_id = val.split(",")
-                            r_id = int(r_id)
-                            r_ids = r_model_ids[r_model]
-                            r[n] = BrowseRecord(
-                                r_model, r_id, r_ids, context=self.context, browse_cache=self.browse_cache)
+                            found=db.query("select id from "+r_model.replace(".","_")+" where id="+r_id)
+                            if not found:
+                                r[n] = BrowseRecord(None, None, [], context=self.context, browse_cache=self.browse_cache)
+                            else:
+                                r_id = int(r_id)
+                                r_ids = r_model_ids[r_model]
+                                r[n] = BrowseRecord(
+                                    r_model, r_id, r_ids, context=self.context, browse_cache=self.browse_cache)
                         else:
                             r[n] = BrowseRecord(None, None, [], context=self.context, browse_cache=self.browse_cache)
             for r in res:
@@ -2497,6 +2590,8 @@ def model_to_json(m):
         f_data["string"] = f.string
         if isinstance(f, fields.Char):
             f_data["type"] = "char"
+            f_data["size"] = f.size
+            f_data["password"] = f.password
         elif isinstance(f, fields.Text):
             f_data["type"] = "text"
         elif isinstance(f, fields.Float):

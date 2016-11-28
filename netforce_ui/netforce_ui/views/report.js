@@ -377,15 +377,6 @@ var Report=NFView.extend({
                 };
                 var view=Button.make_view(opts);
                 foot.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
-                var opts={
-                    string: "Export XLS",
-                    onclick: function() {
-                        that.export_xls();
-                    },
-                    context: context
-                };
-                var view=Button.make_view(opts);
-                foot.append("<div id=\""+view.cid+"\" class=\"view\"></div>");
             } else {
                 var opts={
                     string: "Run Report",
@@ -478,6 +469,7 @@ var Report=NFView.extend({
             ids=[this.model.id];
         } else {
             ids=null;
+            if (this.context) ctx = this.context;
             if (this.options.defaults) ctx.defaults=this.options.defaults;
         }
         var img=$("<img/>").attr("src","/static/img/spinner.gif").addClass("loading");
